@@ -715,11 +715,16 @@ class T2TModel(base.Layer):
     hparams = hparams_lib.copy_hparams(self._original_hparams)
     hparams.add_hparam("mode", mode)
     # When not in training mode, set all forms of dropout to zero.
+    tf.logging.info("####################################")
     if mode != tf.estimator.ModeKeys.TRAIN:
       for key in hparams.values():
-        if key.endswith("dropout") or key == "label_smoothing":
-          log_info("Setting hparams.%s to 0.0", key)
-          setattr(hparams, key, 0.0)
+        # Leave dropout on for uncertainty measure
+        if (not key.endswith("layer_prepostprocess_dropout")
+          and not key.endswith("relu_dropout")):
+
+          if key.endswith("dropout") or key == "label_smoothing":
+            log_info("Setting hparams.%s to 0.0", key)
+            setattr(hparams, key, 0.0)
     self._hparams = hparams
 
   def prepare_features_for_infer(self, features):
