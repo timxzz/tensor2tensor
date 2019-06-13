@@ -215,6 +215,16 @@ def bleu_wrapper(ref_filename, hyp_filename, case_sensitive=False):
   return compute_bleu(ref_tokens, hyp_tokens)
 
 
+def bleu_one_pair(a, b, case_sensitive=False):
+  """Compute BLEU for two MC translation samples."""
+  if not case_sensitive:
+    a = a.lower()
+    b = b.lower()
+  a_tokens = bleu_tokenize(a)
+  b_tokens = bleu_tokenize(b)
+  return compute_bleu(a_tokens, b_tokens)
+
+
 StepFile = collections.namedtuple("StepFile", "filename mtime ctime steps")
 
 

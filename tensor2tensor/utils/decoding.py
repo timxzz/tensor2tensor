@@ -24,6 +24,7 @@ import os
 import re
 import string
 import time
+import itertools
 
 import numpy as np
 import six
@@ -35,6 +36,7 @@ from tensor2tensor.data_generators import text_encoder
 from tensor2tensor.data_generators import text_problems
 from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import registry
+from tensor2tensor.utils import bleu_hook
 from tensor2tensor.utils.hparam import HParams
 import tensorflow as tf
 
@@ -395,7 +397,11 @@ def decode_from_file(estimator,
                      hparams,
                      decode_hp,
                      decode_to_file=None,
-                     checkpoint_path=None):
+                     checkpoint_path=None,
+                     ref_filename=None):
+  #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
+  num_MC_samples=50
+
   """Compute predictions on entries in filename and write them out."""
   if not decode_hp.batch_size:
     decode_hp.batch_size = 32
@@ -414,7 +420,7 @@ def decode_from_file(estimator,
   tf.logging.info("Performing decoding from file (%s)." % filename)
   if has_input:
     sorted_inputs, sorted_keys = _get_sorted_inputs(
-        filename, decode_hp.delimiter)
+        filename, decode_hp.delimiter, repeat=num_MC_samples) # repeat=hp.num_MC_samples
   else:
     sorted_inputs = _get_language_modeling_inputs(
         filename, decode_hp.delimiter, repeat=decode_hp.num_decodes)
@@ -515,6 +521,7 @@ def decode_from_file(estimator,
       decodes.append(decoded_outputs)
     total_time_per_step += elapsed_time
     total_cnt += result["outputs"].shape[-1]
+
   duration = time.time() - start_time
   tf.logging.info("Elapsed Time: %5.5f" % duration)
   tf.logging.info("Averaged Single Token Generation Time: %5.7f "
@@ -529,6 +536,50 @@ def decode_from_file(estimator,
     tf.logging.info("Inference time %.4f seconds "
                     "(Throughput = %.4f sentences/second)" %
                     (duration, num_sentences/duration))
+
+  # Calculating variance of MC samples
+  tf.logging.info("Calculating the mutual BLEU score "
+                  "among the MC samples for each input.")
+  bleu_MC_batchs = []
+  MC_batchs = np.reshape(decodes, (-1, num_MC_samples))
+  for one_batch in MC_batchs:
+    bleu_MC_batch = []
+    for i,j in itertools.combinations(one_batch,2):
+      # 1-BLEU as the larger the BLEU the closer two sentence are
+      bleu_MC_batch.append(100 * (1 - bleu_hook.bleu_one_pair(i,j)))
+    bleu_MC_batchs.append(bleu_MC_batch)
+
+  bleu_square = np.array(bleu_MC_batchs) ** 2
+  variances = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
+  # Duplicate entries and reorder to match the original input order
+  variances = [x for x in variances for _ in range(num_MC_samples)]
+  variances_MC = [variances[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  variances = np.reshape(variances_MC, (-1, num_MC_samples))[:,0]
+
+  # Calculating BLEU of each MC samples
+  tf.logging.info("Calculating the BLEU score for each MC samples towards "
+                  "target output.")
+  ref_lines = text_encoder.native_to_unicode(
+      tf.gfile.Open(ref_filename, "r").read()).split("\n")
+  hyp_lines = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  #if not case_sensitive:
+  ref_lines = [x.lower() for x in ref_lines]
+  ref_lines = [x for x in ref_lines for _ in range(num_MC_samples)]
+  hyp_lines = [x.lower() for x in hyp_lines]
+  ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
+  hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines]
+
+  blues_MC = []
+  for index in range(len(sorted_inputs)):
+    one_bleu = 100 * bleu_hook.compute_bleu(ref_tokens[index], hyp_tokens[index])
+    blues_MC.append(one_bleu)
+  blues = np.mean(np.reshape(blues_MC, (-1, num_MC_samples)), axis=1)
+
+  csv_filename = decode_to_file + ".variance.csv"
+  tf.logging.info("Writing variances into %s" % csv_filename)
+  np.savetxt(csv_filename, np.column_stack((variances, blues)), 
+              delimiter=",", fmt='%s')
+
 
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).
@@ -839,7 +890,7 @@ def _get_language_modeling_inputs(filename,
   return inputs
 
 
-def _get_sorted_inputs(filename, delimiter="\n"):
+def _get_sorted_inputs(filename, delimiter="\n", repeat=1):
   """Returning inputs sorted according to decreasing length.
 
   This causes inputs of similar lengths to be processed in the same batch,
@@ -864,6 +915,9 @@ def _get_sorted_inputs(filename, delimiter="\n"):
     # Strip the last empty line.
     if not inputs[-1]:
       inputs.pop()
+
+  inputs = [i for i in inputs for _ in range(repeat)]
+
   input_lens = [(i, -len(line.split())) for i, line in enumerate(inputs)]
   sorted_input_lens = sorted(input_lens, key=operator.itemgetter(1))
   # We'll need the keys to rearrange the inputs back into their original order

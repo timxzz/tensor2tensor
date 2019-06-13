@@ -58,6 +58,8 @@ flags.DEFINE_integer("decode_shards", 1, "Number of decoding replicas.")
 flags.DEFINE_string("score_file", "", "File to score. Each line in the file "
                     "must be in the format input \t target.")
 flags.DEFINE_bool("decode_in_memory", False, "Decode in memory.")
+flags.DEFINE_string("reference", None, "Path to the reference translation file, "
+                    "used for uncertainty benchmarking.")
 
 
 def create_hparams():
@@ -89,7 +91,8 @@ def decode(estimator, hparams, decode_hp):
   elif FLAGS.decode_from_file:
     decoding.decode_from_file(estimator, FLAGS.decode_from_file, hparams,
                               decode_hp, FLAGS.decode_to_file,
-                              checkpoint_path=FLAGS.checkpoint_path)
+                              checkpoint_path=FLAGS.checkpoint_path,
+                              ref_filename=FLAGS.reference)
     if FLAGS.checkpoint_path and FLAGS.keep_timestamp:
       ckpt_time = os.path.getmtime(FLAGS.checkpoint_path + ".index")
       os.utime(FLAGS.decode_to_file, (ckpt_time, ckpt_time))
