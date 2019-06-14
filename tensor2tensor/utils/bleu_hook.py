@@ -199,16 +199,18 @@ def bleu_tokenize(string):
   return string.split()
 
 
-def bleu_wrapper(ref_filename, hyp_filename, case_sensitive=False):
+def bleu_wrapper(ref_filename, hyp_filename, case_sensitive=False, num_MC_samples=1):
   """Compute BLEU for two files (reference and hypothesis translation)."""
   ref_lines = text_encoder.native_to_unicode(
       tf.gfile.Open(ref_filename, "r").read()).split("\n")
   hyp_lines = text_encoder.native_to_unicode(
       tf.gfile.Open(hyp_filename, "r").read()).split("\n")
-  assert len(ref_lines) == len(hyp_lines), ("{} != {}".format(
-      len(ref_lines), len(hyp_lines)))
+  ref_len = (len(ref_lines) - 1) * num_MC_samples + 1
+  assert ref_len == len(hyp_lines), ("{} != {}".format(
+      ref_len, len(hyp_lines)))
   if not case_sensitive:
     ref_lines = [x.lower() for x in ref_lines]
+    ref_lines = [x for x in ref_lines for _ in range(num_MC_samples)]
     hyp_lines = [x.lower() for x in hyp_lines]
   ref_tokens = [bleu_tokenize(x) for x in ref_lines]
   hyp_tokens = [bleu_tokenize(x) for x in hyp_lines]

@@ -86,6 +86,8 @@ flags.DEFINE_integer("wait_minutes", 0,
                      "save_checkpoints_secs.")
 flags.DEFINE_bool("report_zero", None,
                   "Store BLEU=0 and guess its time based on the oldest file.")
+flags.DEFINE_integer("mc_samples", 1,
+                     "Number of MC samples for calculating uncertainty.")
 
 
 def main(_):
@@ -96,7 +98,8 @@ def main(_):
           "Cannot specify both --translation and --translations_dir.")
     if FLAGS.bleu_variant in ("uncased", "both"):
       bleu = 100 * bleu_hook.bleu_wrapper(FLAGS.reference, FLAGS.translation,
-                                          case_sensitive=False)
+                                          case_sensitive=False, 
+                                          num_MC_samples=FLAGS.mc_samples)
       print("BLEU_uncased = %6.2f" % bleu)
     if FLAGS.bleu_variant in ("cased", "both"):
       bleu = 100 * bleu_hook.bleu_wrapper(FLAGS.reference, FLAGS.translation,
