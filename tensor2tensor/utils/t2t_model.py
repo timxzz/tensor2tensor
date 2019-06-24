@@ -1678,7 +1678,9 @@ class T2TModel(base.Layer):
   def estimator_spec_predict(self, features, use_tpu=False):
     """Constructs `tf.estimator.EstimatorSpec` for PREDICT (inference) mode."""
     decode_hparams = self._decode_hparams
-    top_beams = decode_hparams.beam_size if decode_hparams.return_beams else 1
+    top_beams = decode_hparams.beam_size \
+                if (decode_hparams.return_beams or decode_hparams.uncertainty_over_prob) \
+                else 1
     infer_out = self.infer(
         features,
         beam_size=decode_hparams.beam_size,

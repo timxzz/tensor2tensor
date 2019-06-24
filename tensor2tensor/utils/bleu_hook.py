@@ -129,6 +129,93 @@ def compute_bleu(reference_corpus,
   return np.float32(bleu)
 
 
+def compute_accumulated_bleu(reference_corpus,
+                 translation_corpus,
+                 max_order=4,
+                 use_bp=True):
+  """Computes BLEU score of translated segments against one or more references.
+
+  Args:
+    reference_corpus: list of references for each translation. Each
+        reference should be tokenized into a list of tokens.
+    translation_corpus: list of translations to score. Each translation
+        should be tokenized into a list of tokens.
+    max_order: Maximum n-gram order to use when computing BLEU score.
+    use_bp: boolean, whether to apply brevity penalty.
+
+  Returns:
+    Accumulated BLEU scores.
+  """
+  corpus_len = len(translation_corpus)
+  reference_length = np.zeros((corpus_len,), dtype=int)
+  translation_length = np.zeros((corpus_len,), dtype=int)
+  
+
+  matches_by_order = [[0] * max_order for i in range(corpus_len)]
+  possible_matches_by_order = [[0] * max_order for i in range(corpus_len)]
+
+  index = 0
+  for (references, translations) in zip(reference_corpus, translation_corpus):
+    if index == 0:
+      reference_length[index] += len(references)
+      translation_length[index] += len(translations)
+    else:
+      reference_length[index] = reference_length[index-1] + len(references)
+      translation_length[index] = translation_length[index-1] + len(translations)
+    ref_ngram_counts = _get_ngrams(references, max_order)
+    translation_ngram_counts = _get_ngrams(translations, max_order)
+
+    overlap = dict((ngram,
+                    min(count, translation_ngram_counts[ngram]))
+                   for ngram, count in ref_ngram_counts.items())
+
+    if index != 0:
+      matches_by_order[index] = matches_by_order[index-1].copy()
+      possible_matches_by_order[index] = possible_matches_by_order[index-1].copy()
+    for ngram in overlap:
+      matches_by_order[index][len(ngram) - 1] += overlap[ngram]
+    for ngram in translation_ngram_counts:
+      possible_matches_by_order[index][len(ngram)-1] += translation_ngram_counts[ngram]
+    index += 1
+
+  precisions = [[0] * max_order for i in range(corpus_len)]
+  bleus = np.zeros(corpus_len)
+
+  for j in range(corpus_len):
+    bp = 1.0
+    geo_mean = 0
+    smooth = 1.0
+    for i in range(0, max_order):
+      if possible_matches_by_order[j][i] > 0:
+        precisions[j][i] = matches_by_order[j][i] / possible_matches_by_order[j][i]
+        if matches_by_order[j][i] > 0:
+          precisions[j][i] = matches_by_order[j][i] / possible_matches_by_order[j][i]
+        else:
+          smooth *= 2
+          precisions[j][i] = 1.0 / (smooth * possible_matches_by_order[j][i])
+      else:
+        precisions[j][i] = 0.0
+
+    if max(precisions[j]) > 0:
+      p_log_sum = sum(math.log(p) for p in precisions[j] if p)
+      geo_mean = math.exp(p_log_sum/max_order)
+
+    if use_bp:
+      if not reference_length[j]:
+        bp = 1.0
+      else:
+        ratio = translation_length[j] / reference_length[j]
+        if ratio <= 0.0:
+          bp = 0.0
+        elif ratio >= 1.0:
+          bp = 1.0
+        else:
+          bp = math.exp(1 - 1. / ratio)
+    bleus[j] = geo_mean * bp
+
+  return np.float32(bleus)
+
+
 def bleu_score(predictions, labels, **unused_kwargs):
   """BLEU score computation between labels and predictions.
 
