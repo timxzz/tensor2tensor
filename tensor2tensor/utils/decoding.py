@@ -99,7 +99,8 @@ def decode_hparams(overrides=""):
       mlperf_threshold=25.0,
       mlperf_success=False,
       # Used for uncertainty calculation
-      uncertainty_over_prob=False)
+      uncertainty_over_prob=False,
+      mc_sampling=False)
   hp.parse(overrides)
   return hp
 
@@ -402,7 +403,7 @@ def decode_from_file(estimator,
                      checkpoint_path=None,
                      ref_filename=None):
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=10
+  num_MC_samples=50
   if decode_hp.uncertainty_over_prob:
     num_MC_samples=1
   prob_scores=[] # only for uncertainty of beam probs
@@ -605,7 +606,7 @@ def decode_from_file(estimator,
     variances = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
     sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k])
 
-  # Reorder according to variances
+  # Reorder according to sorted variances
   variances = [variances[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
   # Calculating BLEU of each MC median samples
   tf.logging.info("Calculating the accumulated BLEU scores for each MC median samples towards "
@@ -620,13 +621,37 @@ def decode_from_file(estimator,
   ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
   hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines]
 
-  accumulated_blues = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
+  # ------------ For accumulated BLEU ------------------
+  hyp_lengths = [len(x) for x in hyp_tokens]
 
-  csv_filename = decode_to_file + ".variance.csv"
+  num_of_len_subset = 10
+  sorted_hyp_lengths = sorted(hyp_lengths)
+  splited_hyp_lengths = np.array_split(sorted_hyp_lengths, num_of_len_subset)
+
+  for i in range(num_of_len_subset):
+    ref_tokens_sub = []
+    hyp_tokens_sub = []
+    hyp_lengths_sub = []
+    variances_sub = []
+    for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, variances):
+      if hyp_length in splited_hyp_lengths[i]:
+        ref_tokens_sub.append(ref_token)
+        hyp_tokens_sub.append(hyp_token)
+        hyp_lengths_sub.append(hyp_length)
+        variances_sub.append(variance)
+    accumulated_blues_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
+    csv_filename = decode_to_file + ".variances_sub" + str(i) + ".csv"
+    tf.logging.info("Writing variances into %s" % csv_filename)
+    np.savetxt(csv_filename, np.column_stack((variances_sub, accumulated_blues_sub, hyp_lengths_sub)), 
+                delimiter=",", fmt='%s')
+
+  accumulated_blues = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
+  csv_filename = decode_to_file + ".variances_full.csv"
   tf.logging.info("Writing variances into %s" % csv_filename)
-  np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues)), 
+  np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues, hyp_lengths)),
               delimiter=",", fmt='%s')
 
+  # ----------------------------------------------------
 
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).

@@ -219,10 +219,10 @@ class T2TModel(base.Layer):
             hparams.weights_fn[feature_name] = weights_fn
 
     self._original_hparams = hparams
-    self.set_mode(mode)
-
     self._decode_hparams = hparams_lib.copy_hparams(
         decode_hparams or decoding.decode_hparams())
+    self.set_mode(mode)
+
     self._data_parallelism = data_parallelism or eu.Parallelism([""])
     self._num_datashards = self._data_parallelism.n
     self._ps_devices = self._data_parallelism.ps_devices
@@ -714,14 +714,20 @@ class T2TModel(base.Layer):
     log_info("Setting T2TModel mode to '%s'", mode)
     hparams = hparams_lib.copy_hparams(self._original_hparams)
     hparams.add_hparam("mode", mode)
+
     # When not in training mode, set all forms of dropout to zero.
     tf.logging.info("####################################")
     if mode != tf.estimator.ModeKeys.TRAIN:
       for key in hparams.values():
-        # Leave dropout on for uncertainty measure
-        if (not key.endswith("layer_prepostprocess_dropout")
-          and not key.endswith("relu_dropout")):
 
+        # if not measuring uncertainty, leave dropout off
+        if not self._decode_hparams.mc_sampling:
+          if key.endswith("dropout") or key == "label_smoothing":
+            log_info("Setting hparams.%s to 0.0", key)
+            setattr(hparams, key, 0.0)
+        # Leave dropout on for uncertainty measure
+        elif (not key.endswith("layer_prepostprocess_dropout")
+          and not key.endswith("relu_dropout")):
           if key.endswith("dropout") or key == "label_smoothing":
             log_info("Setting hparams.%s to 0.0", key)
             setattr(hparams, key, 0.0)
@@ -861,6 +867,7 @@ class T2TModel(base.Layer):
       NotImplementedError: If use_tpu is set to true.
     """
     batch_size = common_layers.shape_list(features["inputs"])[0]
+    tf.logging.info("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
     def symbols_to_logits_fn(ids, i=None):
       """Go from ids to logits."""
