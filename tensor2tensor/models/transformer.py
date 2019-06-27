@@ -89,8 +89,13 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
       value=hparams.layer_prepostprocess_dropout,
       hparams=hparams)
 
+  mc_dropout_seed = None
+  if hasattr(hparams, 'mc_dropout_seed'):
+    mc_dropout_seed = hparams.mc_dropout_seed
+
   encoder_input = tf.nn.dropout(encoder_input,
-                                1.0 - hparams.layer_prepostprocess_dropout)
+                                1.0 - hparams.layer_prepostprocess_dropout,
+                                seed=mc_dropout_seed)
 
   attn_bias_for_padding = None
   # Otherwise the encoder will just use encoder_self_attention_bias.
@@ -152,8 +157,14 @@ def transformer_decode(decoder_function,
       key=mlperf_log.MODEL_HP_LAYER_POSTPROCESS_DROPOUT,
       value=hparams.layer_prepostprocess_dropout,
       hparams=hparams)
+
+  mc_dropout_seed = None
+  if hasattr(hparams, 'mc_dropout_seed'):
+    mc_dropout_seed = hparams.mc_dropout_seed
+
   decoder_input = tf.nn.dropout(decoder_input,
-                                1.0 - hparams.layer_prepostprocess_dropout)
+                                1.0 - hparams.layer_prepostprocess_dropout,
+                                seed=mc_dropout_seed)
 
   decoder_output = decoder_function(
       decoder_input,

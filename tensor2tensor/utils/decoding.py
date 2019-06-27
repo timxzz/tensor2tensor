@@ -24,7 +24,6 @@ import os
 import re
 import string
 import time
-import itertools
 
 import numpy as np
 import six
@@ -400,12 +399,8 @@ def decode_from_file(estimator,
                      hparams,
                      decode_hp,
                      decode_to_file=None,
-                     checkpoint_path=None,
-                     ref_filename=None):
-  #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=50
-  if decode_hp.uncertainty_over_prob:
-    num_MC_samples=1
+                     checkpoint_path=None):
+
   prob_scores=[] # only for uncertainty of beam probs
 
   """Compute predictions on entries in filename and write them out."""
@@ -426,7 +421,7 @@ def decode_from_file(estimator,
   tf.logging.info("Performing decoding from file (%s)." % filename)
   if has_input:
     sorted_inputs, sorted_keys = _get_sorted_inputs(
-        filename, decode_hp.delimiter, repeat=num_MC_samples) # repeat=hp.num_MC_samples
+        filename, decode_hp.delimiter)
   else:
     sorted_inputs = _get_language_modeling_inputs(
         filename, decode_hp.delimiter, repeat=decode_hp.num_decodes)
@@ -573,86 +568,7 @@ def decode_from_file(estimator,
 
   # Reorder
   decodes = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
-  # Variance
-  variances = 0
-  median_samples = []
-  sorted_variances_key = []
-  if decode_hp.uncertainty_over_prob:
-    tf.logging.info("Calculating variance through prob of top beam.")
-    variances = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
-    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k], reverse=True)
-    median_samples = decodes
-  else:
-    # Calculating variance of MC samples
-    tf.logging.info("Calculating the mutual BLEU score "
-                    "among the MC samples for each input.")
-    bleu_MC_batchs = []
-    MC_batchs = np.reshape(decodes, (-1, num_MC_samples))
-    for one_batch in MC_batchs:
-      bleu_MC_batch = []
-      median_bleu_sums = [0] * num_MC_samples
-      for i,j in itertools.combinations(list(range(num_MC_samples)),2):
-        # 1-BLEU as the larger the BLEU the closer two sentence are
-        b = 100 * (1 - bleu_hook.bleu_one_pair(one_batch[i],one_batch[j]))
-        bleu_MC_batch.append(b)
-        # Adding the distance, the min corresponds to median
-        median_bleu_sums[i] += b
-        median_bleu_sums[j] += b
-      index_median = min(range(len(median_bleu_sums)), key=median_bleu_sums.__getitem__)
-      median_samples.append(one_batch[index_median])
-      bleu_MC_batchs.append(bleu_MC_batch)
-
-    bleu_square = np.array(bleu_MC_batchs) ** 2
-    variances = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
-    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k])
-
-  # Reorder according to sorted variances
-  variances = [variances[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
-  # Calculating BLEU of each MC median samples
-  tf.logging.info("Calculating the accumulated BLEU scores for each MC median samples towards "
-                  "target output.")
-  ref_lines = text_encoder.native_to_unicode(
-      tf.gfile.Open(ref_filename, "r").read()).split("\n")
-  ref_lines = [ref_lines[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
-  hyp_lines = [median_samples[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
-  #if not case_sensitive:
-  ref_lines = [x.lower() for x in ref_lines]
-  hyp_lines = [x.lower() for x in hyp_lines]
-  ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
-  hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines]
-
-  # ------------ For accumulated BLEU ------------------
-  hyp_lengths = [len(x) for x in hyp_tokens]
-
-  num_of_len_subset = 10
-  sorted_hyp_lengths = sorted(hyp_lengths)
-  splited_hyp_lengths = np.array_split(sorted_hyp_lengths, num_of_len_subset)
-
-  for i in range(num_of_len_subset):
-    ref_tokens_sub = []
-    hyp_tokens_sub = []
-    hyp_lengths_sub = []
-    variances_sub = []
-    for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, variances):
-      if hyp_length in splited_hyp_lengths[i]:
-        ref_tokens_sub.append(ref_token)
-        hyp_tokens_sub.append(hyp_token)
-        hyp_lengths_sub.append(hyp_length)
-        variances_sub.append(variance)
-    accumulated_blues_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
-    csv_filename = decode_to_file + ".variances_sub" + str(i) + ".csv"
-    tf.logging.info("Writing variances into %s" % csv_filename)
-    np.savetxt(csv_filename, np.column_stack((variances_sub, accumulated_blues_sub, hyp_lengths_sub)), 
-                delimiter=",", fmt='%s')
-
-  accumulated_blues = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
-  csv_filename = decode_to_file + ".variances_full.csv"
-  tf.logging.info("Writing variances into %s" % csv_filename)
-  np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues, hyp_lengths)),
-              delimiter=",", fmt='%s')
-
-  # ----------------------------------------------------
-
+ 
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).
   # Otherwise, use the input filename plus model, hp, problem, beam, alpha.
@@ -661,18 +577,12 @@ def decode_from_file(estimator,
     decode_filename = _decode_filename(decode_filename, problem_name, decode_hp)
   else:
     decode_filename = _add_shard_to_filename(decode_filename, decode_hp)
+  if hasattr(hparams, 'mc_dropout_seed'):
+    decode_filename = decode_filename + ".seed-" + str(hparams.mc_dropout_seed)
   tf.logging.info("Writing decodes into %s" % decode_filename)
   outfile = tf.gfile.Open(decode_filename, "w")
   for index in range(len(sorted_inputs)):
     outfile.write("%s%s" % (decodes[index], decode_hp.delimiter))
-  outfile.flush()
-  outfile.close()
-
-  median_csv_filename = decode_to_file + ".median"
-  tf.logging.info("Writing medians into %s" % median_csv_filename)
-  outfile = tf.gfile.Open(median_csv_filename, "w")
-  for index in range(len(sorted_inputs) // num_MC_samples):
-    outfile.write("%s%s" % (median_samples[index], decode_hp.delimiter))
   outfile.flush()
   outfile.close()
 
@@ -687,6 +597,8 @@ def decode_from_file(estimator,
       decode_hparams=decode_hp,
       predictions=list(result_iter)
   ), None)
+
+  return decodes
 
 
 def _add_shard_to_filename(filename, decode_hp):

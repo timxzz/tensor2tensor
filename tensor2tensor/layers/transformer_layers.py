@@ -265,6 +265,9 @@ def transformer_ffn_layer(x,
     ValueError: If losses arg is None, but layer generates extra losses.
   """
   ffn_layer = hparams.ffn_layer
+  mc_dropout_seed = None
+  if hasattr(hparams, 'mc_dropout_seed'):
+    mc_dropout_seed = hparams.mc_dropout_seed
   relu_dropout_broadcast_dims = (
       common_layers.comma_separated_string_to_integer_list(
           getattr(hparams, "relu_dropout_broadcast_dims", "")))
@@ -299,7 +302,8 @@ def transformer_ffn_layer(x,
         hparams.hidden_size,
         dropout=hparams.relu_dropout,
         dropout_broadcast_dims=relu_dropout_broadcast_dims,
-        layer_collection=layer_collection)
+        layer_collection=layer_collection,
+        mc_dropout_seed=mc_dropout_seed)
     if pad_remover:
       # Restore `conv_output` to the original shape of `x`, including padding.
       conv_output = tf.reshape(

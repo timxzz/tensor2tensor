@@ -43,13 +43,16 @@ def create_hparams(hparams_set,
                    hparams_overrides_str="",
                    data_dir=None,
                    problem_name=None,
-                   hparams_path=None):
+                   hparams_path=None,
+                   mc_dropout_seed=None):
   """Create HParams with data_dir and problem hparams, if kwargs provided."""
   hparams = registry.hparams(hparams_set)
   if hparams_path and tf.gfile.Exists(hparams_path):
     hparams = create_hparams_from_json(hparams_path, hparams)
   if data_dir:
     hparams.add_hparam("data_dir", data_dir)
+  if mc_dropout_seed:
+    hparams.add_hparam("mc_dropout_seed", mc_dropout_seed)
   if hparams_overrides_str:
     tf.logging.info("Overriding hparams in %s with %s", hparams_set,
                     hparams_overrides_str)

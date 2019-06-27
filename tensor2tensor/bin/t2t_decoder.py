@@ -33,6 +33,8 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import itertools
+
 from tensor2tensor.bin import t2t_trainer
 from tensor2tensor.data_generators import problem  # pylint: disable=unused-import
 from tensor2tensor.data_generators import text_encoder
@@ -40,8 +42,10 @@ from tensor2tensor.utils import decoding
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import trainer_lib
 from tensor2tensor.utils import usr_dir
+from tensor2tensor.utils import bleu_hook
 
 import tensorflow as tf
+import numpy as np
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -60,13 +64,18 @@ flags.DEFINE_string("score_file", "", "File to score. Each line in the file "
 flags.DEFINE_bool("decode_in_memory", False, "Decode in memory.")
 flags.DEFINE_string("reference", None, "Path to the reference translation file, "
                     "used for uncertainty benchmarking.")
+flags.DEFINE_bool("mc_sampling", False, "Whether or not to turn on MC sampling for "
+                  "uncertainty evaluation.")
+flags.DEFINE_integer("mc_dropout_seed", None, "Random seed for dropout turned on "
+                     "during the MC sampling stage.")
 
 
-def create_hparams():
+def create_hparams(mc_dropout_seed=None):
   return trainer_lib.create_hparams(
       FLAGS.hparams_set,
       FLAGS.hparams,
       data_dir=os.path.expanduser(FLAGS.data_dir),
+      mc_dropout_seed=mc_dropout_seed,
       problem_name=FLAGS.problem)
 
 
@@ -78,6 +87,7 @@ def create_decode_hparams():
   decode_hp.decode_in_memory = decode_in_memory
   decode_hp.decode_to_file = FLAGS.decode_to_file
   decode_hp.decode_reference = FLAGS.decode_reference
+  decode_hp.mc_sampling = FLAGS.mc_sampling
   return decode_hp
 
 
@@ -89,13 +99,13 @@ def decode(estimator, hparams, decode_hp):
     decoding.decode_interactively(estimator, hparams, decode_hp,
                                   checkpoint_path=FLAGS.checkpoint_path)
   elif FLAGS.decode_from_file:
-    decoding.decode_from_file(estimator, FLAGS.decode_from_file, hparams,
-                              decode_hp, FLAGS.decode_to_file,
-                              checkpoint_path=FLAGS.checkpoint_path,
-                              ref_filename=FLAGS.reference)
+    result = decoding.decode_from_file(estimator, FLAGS.decode_from_file, hparams,
+                                       decode_hp, FLAGS.decode_to_file,
+                                       checkpoint_path=FLAGS.checkpoint_path)
     if FLAGS.checkpoint_path and FLAGS.keep_timestamp:
       ckpt_time = os.path.getmtime(FLAGS.checkpoint_path + ".index")
       os.utime(FLAGS.decode_to_file, (ckpt_time, ckpt_time))
+    return result
   else:
     decoding.decode_from_dataset(
         estimator,
@@ -183,17 +193,127 @@ def main(_):
     write_file.close()
     return
 
-  hp = create_hparams()
-  decode_hp = create_decode_hparams()
+  #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
+  num_MC_samples=10
 
-  estimator = trainer_lib.create_estimator(
-      FLAGS.model,
-      hp,
-      t2t_trainer.create_run_config(hp),
-      decode_hparams=decode_hp,
-      use_tpu=FLAGS.use_tpu)
+  num_runs = 1
+  if FLAGS.mc_sampling:
+    num_runs = num_MC_samples
 
-  decode(estimator, hp, decode_hp)
+  mc_samples = []
+  mc_dropout_seeds = np.random.randint(10000, size=num_MC_samples)
+  for i in range(num_runs):
+
+    mc_dropout_seed = None
+    if FLAGS.mc_sampling:
+      tf.logging.info("------------ MC Sampling: {}/{} -------------".format((i+1), num_MC_samples))
+      mc_dropout_seed = mc_dropout_seeds[i]
+
+    hp = create_hparams(mc_dropout_seed)
+    decode_hp = create_decode_hparams()
+
+    estimator = trainer_lib.create_estimator(
+        FLAGS.model,
+        hp,
+        t2t_trainer.create_run_config(hp),
+        decode_hparams=decode_hp,
+        use_tpu=FLAGS.use_tpu)
+
+    result = decode(estimator, hp, decode_hp)
+    if not FLAGS.mc_sampling:
+      return
+    mc_samples.append(result)
+
+  tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
+  tf.logging.info(mc_dropout_seeds)
+  decodes = np.array(mc_samples).flatten('F')
+  # ======================= Variance ===========================
+  variances = 0
+  median_samples = []
+  sorted_variances_key = []
+  if decode_hp.uncertainty_over_prob: # <---------------------------------------!!!!!!!! Need to be fixed
+    tf.logging.info("Calculating variance through prob of top beam.")
+    variances = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
+    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k], reverse=True)
+    median_samples = decodes
+  else:
+    # Calculating variance of MC samples
+    tf.logging.info("Calculating the mutual BLEU score "
+                    "among the MC samples for each input.")
+    bleu_MC_batchs = []
+    MC_batchs = np.reshape(decodes, (-1, num_MC_samples))
+    for one_batch in MC_batchs:
+      bleu_MC_batch = []
+      median_bleu_sums = [0] * num_MC_samples
+      for i,j in itertools.combinations(list(range(num_MC_samples)),2):
+        # 1-BLEU as the larger the BLEU the closer two sentence are
+        b = 100 * (1 - bleu_hook.bleu_one_pair(one_batch[i],one_batch[j]))
+        bleu_MC_batch.append(b)
+        # Adding the distance, the min corresponds to median
+        median_bleu_sums[i] += b
+        median_bleu_sums[j] += b
+      index_median = min(range(len(median_bleu_sums)), key=median_bleu_sums.__getitem__)
+      median_samples.append(one_batch[index_median])
+      bleu_MC_batchs.append(bleu_MC_batch)
+
+    bleu_square = np.array(bleu_MC_batchs) ** 2
+    variances = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
+    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k])
+
+  # Reorder according to sorted variances
+  variances = [variances[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
+  # Calculating BLEU of each MC median samples
+  tf.logging.info("Calculating the accumulated BLEU scores for each MC median samples towards "
+                  "target output.") 
+  ref_lines = text_encoder.native_to_unicode(
+      tf.gfile.Open(FLAGS.reference, "r").read()).split("\n")
+  ref_lines = [ref_lines[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
+  hyp_lines = [median_samples[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
+  #if not case_sensitive:
+  ref_lines = [x.lower() for x in ref_lines]
+  hyp_lines = [x.lower() for x in hyp_lines]
+  ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
+  hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines]
+
+  # ------------ For accumulated BLEU ------------------
+  hyp_lengths = [len(x) for x in hyp_tokens]
+
+  # num_of_len_subset = 10
+  # sorted_hyp_lengths = sorted(hyp_lengths)
+  # splited_hyp_lengths = np.array_split(sorted_hyp_lengths, num_of_len_subset)
+
+  # for i in range(num_of_len_subset):
+  #   ref_tokens_sub = []
+  #   hyp_tokens_sub = []
+  #   hyp_lengths_sub = []
+  #   variances_sub = []
+  #   for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, variances):
+  #     if hyp_length in splited_hyp_lengths[i]:
+  #       ref_tokens_sub.append(ref_token)
+  #       hyp_tokens_sub.append(hyp_token)
+  #       hyp_lengths_sub.append(hyp_length)
+  #       variances_sub.append(variance)
+  #   accumulated_blues_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
+  #   csv_filename = decode_to_file + ".variances_sub" + str(i) + ".csv"
+  #   tf.logging.info("Writing variances into %s" % csv_filename)
+  #   np.savetxt(csv_filename, np.column_stack((variances_sub, accumulated_blues_sub, hyp_lengths_sub)), 
+  #               delimiter=",", fmt='%s')
+
+  accumulated_blues = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
+  csv_filename = FLAGS.decode_to_file + ".variances_full.csv"
+  tf.logging.info("Writing variances into %s" % csv_filename)
+  np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues, hyp_lengths)),
+              delimiter=",", fmt='%s')
+
+  # median_csv_filename = decode_to_file + ".median"
+  # tf.logging.info("Writing medians into %s" % median_csv_filename)
+  # outfile = tf.gfile.Open(median_csv_filename, "w")
+  # for index in range(len(sorted_inputs) // num_MC_samples):
+  #   outfile.write("%s%s" % (median_samples[index], decode_hp.delimiter))
+  # outfile.flush()
+  # outfile.close()
+
+
 
 
 if __name__ == "__main__":

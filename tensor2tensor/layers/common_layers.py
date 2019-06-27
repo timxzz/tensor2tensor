@@ -831,7 +831,8 @@ def layer_prepostprocess(previous_value,
                          default_name,
                          name=None,
                          dropout_broadcast_dims=None,
-                         layer_collection=None):
+                         layer_collection=None,
+                         mc_dropout_seed=None):
   """Apply a sequence of functions to the input or output of a layer.
 
   The sequence is specified as a string which may contain the following
@@ -877,7 +878,8 @@ def layer_prepostprocess(previous_value,
       else:
         assert c == "d", ("Unknown sequence step %s" % c)
         x = dropout_with_broadcast_dims(
-            x, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims)
+            x, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims,
+            seed=mc_dropout_seed)
     return x
 
 
@@ -908,6 +910,11 @@ def layer_preprocess(layer_input, hparams, layer_collection=None):
       "No residual connections allowed in hparams.layer_preprocess_sequence")
   assert "z" not in hparams.layer_preprocess_sequence, (
       "No residual connections allowed in hparams.layer_preprocess_sequence")
+
+  mc_dropout_seed = None
+  if hasattr(hparams, 'mc_dropout_seed'):
+    mc_dropout_seed = hparams.mc_dropout_seed
+
   return layer_prepostprocess(
       None,
       layer_input,
@@ -919,7 +926,8 @@ def layer_preprocess(layer_input, hparams, layer_collection=None):
       dropout_broadcast_dims=comma_separated_string_to_integer_list(
           getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", "")),
       default_name="layer_prepostprocess",
-      layer_collection=layer_collection)
+      layer_collection=layer_collection,
+      mc_dropout_seed=mc_dropout_seed)
 
 
 def layer_postprocess(layer_input, layer_output, hparams):
@@ -944,6 +952,10 @@ def layer_postprocess(layer_input, layer_output, hparams):
   Returns:
     a Tensor
   """
+  mc_dropout_seed = None
+  if hasattr(hparams, 'mc_dropout_seed'):
+    mc_dropout_seed = hparams.mc_dropout_seed
+
   return layer_prepostprocess(
       layer_input,
       layer_output,
@@ -954,7 +966,8 @@ def layer_postprocess(layer_input, layer_output, hparams):
       epsilon=hparams.norm_epsilon,
       dropout_broadcast_dims=comma_separated_string_to_integer_list(
           getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", "")),
-      default_name="layer_postprocess")
+      default_name="layer_postprocess",
+      mc_dropout_seed=mc_dropout_seed)
 
 
 def conv_block_internal(conv_fn,
@@ -1274,7 +1287,8 @@ def dense_relu_dense(inputs,
                      dropout=0.0,
                      dropout_broadcast_dims=None,
                      layer_collection=None,
-                     name=None):
+                     name=None,
+                     mc_dropout_seed=None):
   """Hidden layer with RELU activation followed by linear projection."""
   # layer_name is appended with "conv1" or "conv2" in this method only for
   # historical reasons. These are in fact dense layers.
@@ -1289,7 +1303,8 @@ def dense_relu_dense(inputs,
 
   if dropout != 0.0:
     h = dropout_with_broadcast_dims(
-        h, 1.0 - dropout, broadcast_dims=dropout_broadcast_dims)
+        h, 1.0 - dropout, broadcast_dims=dropout_broadcast_dims,
+        seed=mc_dropout_seed)
   o = dense(
       h,
       output_size,
