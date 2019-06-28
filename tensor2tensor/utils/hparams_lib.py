@@ -54,8 +54,6 @@ def create_hparams(hparams_set,
     hparams.add_hparam("data_dir", data_dir)
   if mc_dropout_seed:
     hparams.add_hparam("mc_dropout_seed", mc_dropout_seed)
-  if seed_per_model:
-    hparams.add_hparam("seed_per_model", seed_per_model)
   if hparams_overrides_str:
     tf.logging.info("Overriding hparams in %s with %s", hparams_set,
                     hparams_overrides_str)

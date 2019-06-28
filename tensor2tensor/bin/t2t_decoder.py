@@ -34,6 +34,7 @@ from __future__ import print_function
 
 import os
 import itertools
+from subprocess import call
 
 from tensor2tensor.bin import t2t_trainer
 from tensor2tensor.data_generators import problem  # pylint: disable=unused-import
@@ -70,13 +71,12 @@ flags.DEFINE_integer("mc_dropout_seed", None, "Random seed for dropout turned on
                      "during the MC sampling stage.")
 
 
-def create_hparams(mc_dropout_seed=None, seed_per_model=None):
+def create_hparams(mc_dropout_seed=None):
   return trainer_lib.create_hparams(
       FLAGS.hparams_set,
       FLAGS.hparams,
       data_dir=os.path.expanduser(FLAGS.data_dir),
       mc_dropout_seed=mc_dropout_seed,
-      seed_per_model=seed_per_model,
       problem_name=FLAGS.problem)
 
 
@@ -195,14 +195,14 @@ def main(_):
     return
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=50
+  num_MC_samples=10 #------------------------!!!
 
   num_runs = 1
   if FLAGS.mc_sampling:
     num_runs = num_MC_samples
 
   mc_samples = []
-  mc_dropout_seeds = np.random.randint(10000, size=num_MC_samples)
+  mc_dropout_seeds = np.random.randint(1000000, size=num_MC_samples)
   for i in range(num_runs):
 
     mc_dropout_seed = None
@@ -210,8 +210,7 @@ def main(_):
       tf.logging.info("------------ MC Sampling: {}/{} -------------".format((i+1), num_MC_samples))
       mc_dropout_seed = mc_dropout_seeds[i]
 
-    FLAGS.random_seed=int(mc_dropout_seed)
-    hp = create_hparams(seed_per_model=mc_dropout_seed)
+    hp = create_hparams(mc_dropout_seed=mc_dropout_seed)
     decode_hp = create_decode_hparams()
 
     estimator = trainer_lib.create_estimator(

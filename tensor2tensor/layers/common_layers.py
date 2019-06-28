@@ -22,6 +22,7 @@ import collections
 import contextlib
 import functools
 import math
+import hashlib
 
 import numpy as np
 from six.moves import range  # pylint: disable=redefined-builtin
@@ -100,7 +101,8 @@ def to_float(x):
   return tf.cast(x, tf.float32)
 
 
-def dropout_with_broadcast_dims(x, keep_prob, broadcast_dims=None, **kwargs):
+def dropout_with_broadcast_dims(x, keep_prob, broadcast_dims=None, 
+                                mc_dropout_seed=None, **kwargs):
   """Like tf.nn.dropout but takes broadcast_dims instead of noise_shape.
 
   Instead of specifying noise_shape, this function takes broadcast_dims -
@@ -127,7 +129,13 @@ def dropout_with_broadcast_dims(x, keep_prob, broadcast_dims=None, **kwargs):
     kwargs["noise_shape"] = [
         1 if i in broadcast_dims else shape[i] for i in range(ndims)
     ]
-  return tf.nn.dropout(x, keep_prob, **kwargs)
+
+  seed = None
+  if mc_dropout_seed is not None:
+    name_scope = tf.get_default_graph().get_name_scope()
+    seed = mc_dropout_seed + int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
+
+  return tf.nn.dropout(x, keep_prob, seed=seed, **kwargs)
 
 
 def comma_separated_string_to_integer_list(s):
@@ -879,7 +887,7 @@ def layer_prepostprocess(previous_value,
         assert c == "d", ("Unknown sequence step %s" % c)
         x = dropout_with_broadcast_dims(
             x, 1.0 - dropout_rate, broadcast_dims=dropout_broadcast_dims,
-            seed=mc_dropout_seed)
+            mc_dropout_seed=mc_dropout_seed)
     return x
 
 
@@ -1304,7 +1312,7 @@ def dense_relu_dense(inputs,
   if dropout != 0.0:
     h = dropout_with_broadcast_dims(
         h, 1.0 - dropout, broadcast_dims=dropout_broadcast_dims,
-        seed=mc_dropout_seed)
+        mc_dropout_seed=mc_dropout_seed)
   o = dense(
       h,
       output_size,

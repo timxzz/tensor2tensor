@@ -28,6 +28,8 @@ from __future__ import division
 from __future__ import print_function
 from six.moves import range  # pylint: disable=redefined-builtin
 
+import hashlib
+
 from tensor2tensor.data_generators import librispeech
 from tensor2tensor.layers import common_attention
 from tensor2tensor.layers import common_hparams
@@ -91,7 +93,9 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
 
   mc_dropout_seed = None
   if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
+    name_scope = tf.get_default_graph().get_name_scope()
+    mc_dropout_seed = hparams.mc_dropout_seed \
+                      + int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
 
   encoder_input = tf.nn.dropout(encoder_input,
                                 1.0 - hparams.layer_prepostprocess_dropout,
@@ -160,7 +164,9 @@ def transformer_decode(decoder_function,
 
   mc_dropout_seed = None
   if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
+    name_scope = tf.get_default_graph().get_name_scope()
+    mc_dropout_seed = hparams.mc_dropout_seed \
+                      + int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
 
   decoder_input = tf.nn.dropout(decoder_input,
                                 1.0 - hparams.layer_prepostprocess_dropout,
