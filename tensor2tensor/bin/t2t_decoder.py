@@ -70,12 +70,13 @@ flags.DEFINE_integer("mc_dropout_seed", None, "Random seed for dropout turned on
                      "during the MC sampling stage.")
 
 
-def create_hparams(mc_dropout_seed=None):
+def create_hparams(mc_dropout_seed=None, seed_per_model=None):
   return trainer_lib.create_hparams(
       FLAGS.hparams_set,
       FLAGS.hparams,
       data_dir=os.path.expanduser(FLAGS.data_dir),
       mc_dropout_seed=mc_dropout_seed,
+      seed_per_model=seed_per_model,
       problem_name=FLAGS.problem)
 
 
@@ -194,7 +195,7 @@ def main(_):
     return
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=10
+  num_MC_samples=50
 
   num_runs = 1
   if FLAGS.mc_sampling:
@@ -209,7 +210,8 @@ def main(_):
       tf.logging.info("------------ MC Sampling: {}/{} -------------".format((i+1), num_MC_samples))
       mc_dropout_seed = mc_dropout_seeds[i]
 
-    hp = create_hparams(mc_dropout_seed)
+    FLAGS.random_seed=int(mc_dropout_seed)
+    hp = create_hparams(seed_per_model=mc_dropout_seed)
     decode_hp = create_decode_hparams()
 
     estimator = trainer_lib.create_estimator(
@@ -304,6 +306,8 @@ def main(_):
   tf.logging.info("Writing variances into %s" % csv_filename)
   np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues, hyp_lengths)),
               delimiter=",", fmt='%s')
+
+  # ----------------------------------------------------
 
   # median_csv_filename = decode_to_file + ".median"
   # tf.logging.info("Writing medians into %s" % median_csv_filename)

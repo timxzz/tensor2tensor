@@ -577,8 +577,8 @@ def decode_from_file(estimator,
     decode_filename = _decode_filename(decode_filename, problem_name, decode_hp)
   else:
     decode_filename = _add_shard_to_filename(decode_filename, decode_hp)
-  if hasattr(hparams, 'mc_dropout_seed'):
-    decode_filename = decode_filename + ".seed-" + str(hparams.mc_dropout_seed)
+  if hasattr(hparams, 'seed_per_model'):
+    decode_filename = decode_filename + ".seed-" + str(hparams.seed_per_model)
   tf.logging.info("Writing decodes into %s" % decode_filename)
   outfile = tf.gfile.Open(decode_filename, "w")
   for index in range(len(sorted_inputs)):
