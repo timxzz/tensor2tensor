@@ -403,7 +403,8 @@ def beam_search(symbols_to_logits_fn,
                 eos_id=EOS_ID,
                 stop_early=True,
                 use_tpu=False,
-                use_top_k_with_unique=True):
+                use_top_k_with_unique=True,
+                num_samples=1):
   """Beam search with length penalties.
 
   Requires a function that can take the currently decoded symbols and return
@@ -480,7 +481,7 @@ def beam_search(symbols_to_logits_fn,
   finished_flags = tf.zeros([batch_size, beam_size], tf.bool)
 
   def grow_finished(finished_seq, finished_scores, finished_flags, curr_seq,
-                    curr_scores, curr_finished):
+                    curr_scores, curr_finished, num_samples):
     """Given sequences and scores, will gather the top k=beam size sequences.
 
     Args:
@@ -526,7 +527,7 @@ def beam_search(symbols_to_logits_fn,
         use_tpu=use_tpu,
         use_top_k_with_unique=use_top_k_with_unique)
 
-  def grow_alive(curr_seq, curr_scores, curr_log_probs, curr_finished, states):
+  def grow_alive(curr_seq, curr_scores, curr_log_probs, curr_finished, states, num_samples):
     """Given sequences and scores, will gather the top k=beam size sequences.
 
     Args:
@@ -551,7 +552,7 @@ def beam_search(symbols_to_logits_fn,
                                        curr_finished, beam_size, batch_size,
                                        "grow_alive", states, use_tpu=use_tpu)
 
-  def grow_topk(i, alive_seq, alive_log_probs, states):
+  def grow_topk(i, alive_seq, alive_log_probs, states, num_samples):
     r"""Inner beam search loop.
 
     This function takes the current alive sequences, and grows them to topk
@@ -588,14 +589,96 @@ def beam_search(symbols_to_logits_fn,
     # (batch_size * beam_size, decoded_length)
     if states:
       flat_states = nest.map_structure(_merge_beam_dim, states)
-      flat_logits, flat_states = symbols_to_logits_fn(flat_ids, i, flat_states)
-      states = nest.map_structure(
-          lambda t: _unmerge_beam_dim(t, batch_size, beam_size), flat_states)
-    elif use_tpu:
-      flat_logits = symbols_to_logits_fn(flat_ids, i)
-    else:
-      flat_logits = symbols_to_logits_fn(flat_ids)
 
+      def _mc_cond(k, not_used_ids, not_used_states, num_samples, not_used_out):
+        return tf.less(k, num_samples)
+
+      def _mc_loop(k, flat_ids, all_states, num_samples, outputs):
+        flat_logits, new_flat_states = symbols_to_logits_fn(flat_ids, k, flat_states)
+        logits = tf.reshape(flat_logits, [batch_size, beam_size, 1])
+        is_first = tf.equal(k, 0)
+        output = tf.cond(is_first, lambda: logits, lambda: tf.concat([outputs, logits], axis=-1))
+        #all_states = tf.cond(is_first, lambda: new_flat_states, lambda: tf.concat([new_flat_states, flat_states], axis=-1))
+        return k+1, flat_ids, all_states, num_samples, output
+
+      all_states = []
+      (_, _, all_states, _, all_logits) = tf.while_loop(
+        _mc_cond,
+        _mc_loop, [
+           tf.constant(0), flat_ids, tf.Variable(all_states), num_samples,
+           tf.zeros([batch_size, beam_size, 1])
+           ],
+       shape_invariants=[
+           tf.TensorShape([]),
+           flat_ids.get_shape(),
+           tf.TensorShape([None]),
+           tf.TensorShape([]),
+           tf.zeros([batch_size, beam_size]).get_shape().concatenate(tf.Dimension(None))
+       ],
+       parallel_iterations=1,
+       back_prop=False)
+      
+      #flat_logits, flat_states = symbols_to_logits_fn(flat_ids, i, flat_states)
+      #states = nest.map_structure(
+      #    lambda t: _unmerge_beam_dim(t, batch_size, beam_size), flat_states)
+
+    elif use_tpu:
+      def _mc_cond(k, not_used_ids, num_samples, not_used_out):
+        return tf.less(k, num_samples)
+
+      def _mc_loop(k, flat_ids, num_samples, outputs):
+        flat_logits = symbols_to_logits_fn(flat_ids, i)
+        logits = tf.reshape(flat_logits, [batch_size, beam_size, 1])
+        is_first = tf.equal(k, 0)
+        output = tf.cond(is_first, lambda: logits, lambda: tf.concat([outputs, logits], axis=-1))
+        return k+1, flat_ids, num_samples, output
+
+      (_, _, _, all_logits) = tf.while_loop(
+        _mc_cond,
+        _mc_loop, [
+           tf.constant(0), flat_ids, num_samples,
+           tf.zeros([batch_size, beam_size, 1])
+           ],
+       shape_invariants=[
+           tf.TensorShape([]),
+           flat_ids.get_shape(),
+           tf.TensorShape([]),
+           tf.zeros([batch_size, beam_size]).get_shape().concatenate(tf.Dimension(None))
+       ],
+       parallel_iterations=1,
+       back_prop=False)
+
+    else:
+      def _mc_cond(k, not_used_ids, num_samples, not_used_out):
+        return tf.less(k, num_samples)
+
+      def _mc_loop(k, flat_ids, num_samples, outputs):
+        flat_logits = symbols_to_logits_fn(flat_ids)
+        logits = tf.reshape(flat_logits, [batch_size, beam_size, 1])
+        is_first = tf.equal(k, 0)
+        output = tf.cond(is_first, lambda: logits, lambda: tf.concat([outputs, logits], axis=-1))
+        return k+1, flat_ids, num_samples, output
+
+      (_, _, _, all_logits) = tf.while_loop(
+        _mc_cond,
+        _mc_loop, [
+           tf.constant(0), flat_ids, num_samples,
+           tf.zeros([batch_size, beam_size, 1])
+           ],
+       shape_invariants=[
+           tf.TensorShape([]),
+           flat_ids.get_shape(),
+           tf.TensorShape([]),
+           tf.zeros([batch_size, beam_size]).get_shape().concatenate(tf.Dimension(None))
+       ],
+       parallel_iterations=1,
+       back_prop=False)
+    
+
+    tf.logging.info(all_logits.get_shape())
+    flat_logits, std_logits = tf.nn.moments(all_logits, axes=[2])
+    tf.logging.info(flat_logits.shape)
+    exit(1)
     logits = tf.reshape(flat_logits, [batch_size, beam_size, -1])
 
     # Convert logits to normalized log probs
@@ -664,7 +747,7 @@ def beam_search(symbols_to_logits_fn,
     return topk_seq, topk_log_probs, topk_scores, topk_finished, states
 
   def inner_loop(i, alive_seq, alive_log_probs, finished_seq, finished_scores,
-                 finished_flags, states):
+                 finished_flags, states, num_samples):
     """Inner beam search loop.
 
     There are three groups of tensors, alive, finished, and topk.
@@ -713,19 +796,20 @@ def beam_search(symbols_to_logits_fn,
     # 1. Get the current topk items.
     # 2. Extract the ones that have finished and haven't finished
     # 3. Recompute the contents of finished based on scores.
+
     topk_seq, topk_log_probs, topk_scores, topk_finished, states = grow_topk(
-        i, alive_seq, alive_log_probs, states)
+        i, alive_seq, alive_log_probs, states, num_samples)
     alive_seq, alive_log_probs, _, states = grow_alive(
-        topk_seq, topk_scores, topk_log_probs, topk_finished, states)
+        topk_seq, topk_scores, topk_log_probs, topk_finished, states, num_samples)
     finished_seq, finished_scores, finished_flags, _ = grow_finished(
         finished_seq, finished_scores, finished_flags, topk_seq, topk_scores,
-        topk_finished)
+        topk_finished, num_samples)
 
     return (i + 1, alive_seq, alive_log_probs, finished_seq, finished_scores,
-            finished_flags, states)
+            finished_flags, states, num_samples)
 
   def _is_finished(i, unused_alive_seq, alive_log_probs, unused_finished_seq,
-                   finished_scores, unused_finished_in_finished, unused_states):
+                   finished_scores, unused_finished_in_finished, unused_states, unused_num_samples):
     """Checking termination condition.
 
     We terminate when we decoded up to decode_length or the lowest scoring item
@@ -780,11 +864,11 @@ def beam_search(symbols_to_logits_fn,
   else:
     state_struc = nest.map_structure(get_state_shape_invariants, states)
   (_, alive_seq, alive_log_probs, finished_seq, finished_scores,
-   finished_flags, states) = tf.while_loop(
+   finished_flags, states, _) = tf.while_loop(
        _is_finished,
        inner_loop, [
            tf.constant(0), alive_seq, alive_log_probs, finished_seq,
-           finished_scores, finished_flags, states
+           finished_scores, finished_flags, states, tf.constant(num_samples)
        ],
        shape_invariants=[
            tf.TensorShape([]),
@@ -793,7 +877,8 @@ def beam_search(symbols_to_logits_fn,
            inner_shape,
            finished_scores.get_shape(),
            finished_flags.get_shape(),
-           state_struc
+           state_struc,
+           tf.TensorShape([])
        ],
        parallel_iterations=1,
        back_prop=False)
