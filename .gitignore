@@ -22,3 +22,17 @@ dist/
 
 # Other
 *.DS_Store
+
+# Project unrelated
+t2t-avg-all
+t2t-bleu
+t2t-datagen
+t2t-decoder
+t2t-eval
+t2t-exporter
+t2t-insights-server
+t2t-make-tf-configs
+t2t-query-server
+t2t-trainer
+t2t-translate-all
+.gitignore
