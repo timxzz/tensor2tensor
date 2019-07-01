@@ -24,15 +24,14 @@ dist/
 *.DS_Store
 
 # Project unrelated
-t2t-avg-all
-t2t-bleu
-t2t-datagen
-t2t-decoder
-t2t-eval
-t2t-exporter
-t2t-insights-server
-t2t-make-tf-configs
-t2t-query-server
-t2t-trainer
-t2t-translate-all
-.gitignore
+tensor2tensor/bin/t2t-avg-all
+tensor2tensor/bin/t2t-bleu
+tensor2tensor/bin/t2t-datagen
+tensor2tensor/bin/t2t-decoder
+tensor2tensor/bin/t2t-eval
+tensor2tensor/bin/t2t-exporter
+tensor2tensor/bin/t2t-insights-server
+tensor2tensor/bin/t2t-make-tf-configs
+tensor2tensor/bin/t2t-query-server
+tensor2tensor/bin/t2t-trainer
+tensor2tensor/bin/t2t-translate-all
