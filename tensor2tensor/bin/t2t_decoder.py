@@ -201,7 +201,8 @@ def main(_):
   if FLAGS.mc_sampling:
     num_runs = num_MC_samples
 
-  mc_samples = []
+  results = []
+  probs = []
   mc_dropout_seeds = np.random.randint(1000000, size=num_MC_samples)
   for i in range(num_runs):
 
@@ -220,23 +221,26 @@ def main(_):
         decode_hparams=decode_hp,
         use_tpu=FLAGS.use_tpu)
 
-    result = decode(estimator, hp, decode_hp)
-    if not FLAGS.mc_sampling:
+    result, prob_scores = decode(estimator, hp, decode_hp)
+    if not (FLAGS.mc_sampling or decode_hp.uncertainty_over_prob):
       return
-    mc_samples.append(result)
+    results.append(result)
+    probs = prob_scores
 
-  tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
-  tf.logging.info(mc_dropout_seeds)
-  decodes = np.array(mc_samples).flatten('F')
-  # ======================= Variance ===========================
-  variances = 0
-  median_samples = []
-  sorted_variances_key = []
-  if decode_hp.uncertainty_over_prob: # <---------------------------------------!!!!!!!! Need to be fixed
+  if FLAGS.mc_sampling:
+    tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
+    tf.logging.info(mc_dropout_seeds)
+    
+  decodes = np.array(results).flatten('F')
+  # ======================= Uncertainty ===========================
+  uncertainties = 0
+  mean_samples = []
+  sorted_uncertainties_key = []
+  if decode_hp.uncertainty_over_prob:
     tf.logging.info("Calculating variance through prob of top beam.")
-    variances = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
-    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k], reverse=True)
-    median_samples = decodes
+    uncertainties = probs
+    sorted_uncertainties_key = sorted(range(len(uncertainties)), key=lambda k: uncertainties[k], reverse=True)
+    mean_samples = decodes
   else:
     # Calculating variance of MC samples
     tf.logging.info("Calculating the mutual BLEU score "
@@ -245,31 +249,31 @@ def main(_):
     MC_batchs = np.reshape(decodes, (-1, num_MC_samples))
     for one_batch in MC_batchs:
       bleu_MC_batch = []
-      median_bleu_sums = [0] * num_MC_samples
+      mean_bleu_sums = [0] * num_MC_samples
       for i,j in itertools.combinations(list(range(num_MC_samples)),2):
         # 1-BLEU as the larger the BLEU the closer two sentence are
         b = 100 * (1 - bleu_hook.bleu_one_pair(one_batch[i],one_batch[j]))
         bleu_MC_batch.append(b)
-        # Adding the distance, the min corresponds to median
-        median_bleu_sums[i] += b
-        median_bleu_sums[j] += b
-      index_median = min(range(len(median_bleu_sums)), key=median_bleu_sums.__getitem__)
-      median_samples.append(one_batch[index_median])
+        # Adding the distance, the min corresponds to mean
+        mean_bleu_sums[i] += b
+        mean_bleu_sums[j] += b
+      index_mean = min(range(len(mean_bleu_sums)), key=mean_bleu_sums.__getitem__)
+      mean_samples.append(one_batch[index_mean])
       bleu_MC_batchs.append(bleu_MC_batch)
 
     bleu_square = np.array(bleu_MC_batchs) ** 2
-    variances = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
-    sorted_variances_key = sorted(range(len(variances)), key=lambda k: variances[k])
+    uncertainties = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
+    sorted_uncertainties_key = sorted(range(len(uncertainties)), key=lambda k: uncertainties[k])
 
-  # Reorder according to sorted variances
-  variances = [variances[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
-  # Calculating BLEU of each MC median samples
-  tf.logging.info("Calculating the accumulated BLEU scores for each MC median samples towards "
+  # Reorder according to sorted uncertainties
+  uncertainties = [uncertainties[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
+  # Calculating BLEU of each MC mean samples
+  tf.logging.info("Calculating the accumulated BLEU scores for each MC mean samples towards "
                   "target output.") 
   ref_lines = text_encoder.native_to_unicode(
       tf.gfile.Open(FLAGS.reference, "r").read()).split("\n")
-  ref_lines = [ref_lines[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
-  hyp_lines = [median_samples[sorted_variances_key[index]] for index in range(len(sorted_variances_key))]
+  ref_lines = [ref_lines[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
+  hyp_lines = [mean_samples[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
   #if not case_sensitive:
   ref_lines = [x.lower() for x in ref_lines]
   hyp_lines = [x.lower() for x in hyp_lines]
@@ -287,32 +291,45 @@ def main(_):
   #   ref_tokens_sub = []
   #   hyp_tokens_sub = []
   #   hyp_lengths_sub = []
-  #   variances_sub = []
-  #   for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, variances):
+  #   uncertainties_sub = []
+  #   for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, uncertainties):
   #     if hyp_length in splited_hyp_lengths[i]:
   #       ref_tokens_sub.append(ref_token)
   #       hyp_tokens_sub.append(hyp_token)
   #       hyp_lengths_sub.append(hyp_length)
-  #       variances_sub.append(variance)
-  #   accumulated_blues_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
-  #   csv_filename = decode_to_file + ".variances_sub" + str(i) + ".csv"
-  #   tf.logging.info("Writing variances into %s" % csv_filename)
-  #   np.savetxt(csv_filename, np.column_stack((variances_sub, accumulated_blues_sub, hyp_lengths_sub)), 
+  #       uncertainties_sub.append(variance)
+  #   accumulated_bleus_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
+  #   csv_filename = decode_to_file + ".uncertainties_sub" + str(i) + ".csv"
+  #   tf.logging.info("Writing uncertainties into %s" % csv_filename)
+  #   np.savetxt(csv_filename, np.column_stack((uncertainties_sub, accumulated_bleus_sub, hyp_lengths_sub)), 
   #               delimiter=",", fmt='%s')
 
-  accumulated_blues = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
-  csv_filename = FLAGS.decode_to_file + ".variances_full.csv"
-  tf.logging.info("Writing variances into %s" % csv_filename)
-  np.savetxt(csv_filename, np.column_stack((variances, accumulated_blues, hyp_lengths)),
+  accumulated_bleus = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
+
+  tf.logging.info("Calculating the individual BLEU scores for each MC mean samples towards "
+                  "target output.") 
+  individual_bleus = []
+  for (ref, hyp) in zip(ref_tokens, hyp_tokens):
+    individual_bleu = 100 * bleu_hook.compute_bleu(ref, hyp)
+    individual_bleus.append(individual_bleu)
+
+  csv_filename = ""
+  if decode_hp.uncertainty_over_prob:
+    csv_filename = FLAGS.decode_to_file + ".prob_full.csv"
+    tf.logging.info("Writing sequence prob into %s" % csv_filename)
+  else:
+    csv_filename = FLAGS.decode_to_file + ".variance_full.csv"
+    tf.logging.info("Writing variance into %s" % csv_filename)
+  np.savetxt(csv_filename, np.column_stack((uncertainties, accumulated_bleus, individual_bleus, hyp_lengths)),
               delimiter=",", fmt='%s')
 
   # ----------------------------------------------------
 
-  # median_csv_filename = decode_to_file + ".median"
-  # tf.logging.info("Writing medians into %s" % median_csv_filename)
-  # outfile = tf.gfile.Open(median_csv_filename, "w")
+  # mean_csv_filename = decode_to_file + ".mean"
+  # tf.logging.info("Writing means into %s" % mean_csv_filename)
+  # outfile = tf.gfile.Open(mean_csv_filename, "w")
   # for index in range(len(sorted_inputs) // num_MC_samples):
-  #   outfile.write("%s%s" % (median_samples[index], decode_hp.delimiter))
+  #   outfile.write("%s%s" % (mean_samples[index], decode_hp.delimiter))
   # outfile.flush()
   # outfile.close()
 

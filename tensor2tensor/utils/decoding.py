@@ -568,6 +568,8 @@ def decode_from_file(estimator,
 
   # Reorder
   decodes = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  if decode_hp.uncertainty_over_prob:
+    prob_scores = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
  
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).
@@ -598,7 +600,7 @@ def decode_from_file(estimator,
       predictions=list(result_iter)
   ), None)
 
-  return decodes
+  return decodes, prob_scores
 
 
 def _add_shard_to_filename(filename, decode_hp):
