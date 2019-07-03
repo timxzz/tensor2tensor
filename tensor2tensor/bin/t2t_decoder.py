@@ -195,7 +195,7 @@ def main(_):
     return
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=10 #------------------------!!!
+  num_MC_samples=2 #------------------------!!!
 
   num_runs = 1
   if FLAGS.mc_sampling:
@@ -203,7 +203,9 @@ def main(_):
 
   results = []
   probs = []
-  mc_dropout_seeds = np.random.randint(1000000, size=num_MC_samples)
+  #mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
+  mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
+  # mc_dropout_seeds = np.array([[853751, 85362], [853751, 85362]])
   for i in range(num_runs):
 
     mc_dropout_seed = None
@@ -229,7 +231,7 @@ def main(_):
 
   if FLAGS.mc_sampling:
     tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
-    tf.logging.info(mc_dropout_seeds)
+    tf.logging.info(mc_dropout_seeds.tolist())
     
   decodes = np.array(results).flatten('F')
   # ======================= Uncertainty ===========================

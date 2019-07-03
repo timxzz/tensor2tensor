@@ -35,6 +35,8 @@ from tensorflow.python.framework import ops
 from tensorflow.python.ops import control_flow_util
 from tensorflow.python.ops import inplace_ops
 
+from tensor2tensor.layers import stateless_dropout
+
 
 _cached_layers = None
 
@@ -133,9 +135,13 @@ def dropout_with_broadcast_dims(x, keep_prob, broadcast_dims=None,
   seed = None
   if mc_dropout_seed is not None:
     name_scope = tf.get_default_graph().get_name_scope()
-    seed = mc_dropout_seed + int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
+    name_salt = int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
+    seed = [name_salt] * 2
+    seed[0] += mc_dropout_seed[0]
+    seed[1] += mc_dropout_seed[1]
 
-  return tf.nn.dropout(x, keep_prob, seed=seed, **kwargs)
+
+  return stateless_dropout.stateless_dropout(x, keep_prob, seed=seed, **kwargs)
 
 
 def comma_separated_string_to_integer_list(s):

@@ -52,7 +52,7 @@ def create_hparams(hparams_set,
     hparams = create_hparams_from_json(hparams_path, hparams)
   if data_dir:
     hparams.add_hparam("data_dir", data_dir)
-  if mc_dropout_seed:
+  if mc_dropout_seed is not None:
     hparams.add_hparam("mc_dropout_seed", mc_dropout_seed)
   if hparams_overrides_str:
     tf.logging.info("Overriding hparams in %s with %s", hparams_set,
