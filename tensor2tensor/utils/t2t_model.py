@@ -731,6 +731,14 @@ class T2TModel(base.Layer):
           if key.endswith("dropout") or key == "label_smoothing":
             log_info("Setting hparams.%s to 0.0", key)
             setattr(hparams, key, 0.0)
+
+        # Set dropout dims if measuring uncertainty
+        if self._decode_hparams.mc_sampling \
+          and (key == "layer_prepostprocess_dropout_broadcast_dims"
+              or key == "relu_dropout_broadcast_dims"):
+          log_info("Setting hparams.%s to dims '0,1' ", key)
+          setattr(hparams, key, "0,1")
+
     self._hparams = hparams
 
   def prepare_features_for_infer(self, features):
@@ -867,7 +875,6 @@ class T2TModel(base.Layer):
       NotImplementedError: If use_tpu is set to true.
     """
     batch_size = common_layers.shape_list(features["inputs"])[0]
-    tf.logging.info("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
     def symbols_to_logits_fn(ids, i=None):
       """Go from ids to logits."""

@@ -21,8 +21,6 @@ from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import array_ops
 
-import tensorflow as tf
-
 
 @deprecation.deprecated_args(None, "Please use `rate` instead of `keep_prob`. "
                              "Rate should be set to `rate = 1 - keep_prob`.",

@@ -93,16 +93,16 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
       hparams=hparams)
 
   mc_dropout_seed = None
+  dropout_broadcast_dims = None
   if hasattr(hparams, 'mc_dropout_seed'):
-    name_scope = tf.get_default_graph().get_name_scope()
-    name_salt = int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
-    mc_dropout_seed = [name_salt] * 2
-    mc_dropout_seed[0] += hparams.mc_dropout_seed[0]
-    mc_dropout_seed[1] += hparams.mc_dropout_seed[1]
+    mc_dropout_seed = hparams.mc_dropout_seed
+    dropout_broadcast_dims = common_layers.comma_separated_string_to_integer_list(
+      getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", ""))
 
-  encoder_input = stateless_dropout.stateless_dropout(encoder_input,
-                                1.0 - hparams.layer_prepostprocess_dropout,
-                                seed=mc_dropout_seed)
+  encoder_input = common_layers.dropout_with_broadcast_dims(encoder_input,
+                    1.0 - hparams.layer_prepostprocess_dropout,
+                    mc_dropout_seed=mc_dropout_seed,
+                    broadcast_dims=dropout_broadcast_dims)
 
   attn_bias_for_padding = None
   # Otherwise the encoder will just use encoder_self_attention_bias.
@@ -166,16 +166,16 @@ def transformer_decode(decoder_function,
       hparams=hparams)
 
   mc_dropout_seed = None
+  dropout_broadcast_dims = None
   if hasattr(hparams, 'mc_dropout_seed'):
-    name_scope = tf.get_default_graph().get_name_scope()
-    name_salt = int(hashlib.md5(name_scope.encode('utf-8')).hexdigest()[:8], 16)
-    mc_dropout_seed = [name_salt] * 2
-    mc_dropout_seed[0] += hparams.mc_dropout_seed[0]
-    mc_dropout_seed[1] += hparams.mc_dropout_seed[1]
+    mc_dropout_seed = hparams.mc_dropout_seed
+    dropout_broadcast_dims = common_layers.comma_separated_string_to_integer_list(
+      getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", ""))
 
-  decoder_input = stateless_dropout.stateless_dropout(decoder_input,
-                                1.0 - hparams.layer_prepostprocess_dropout,
-                                seed=mc_dropout_seed)
+  decoder_input = common_layers.dropout_with_broadcast_dims(decoder_input,
+                    1.0 - hparams.layer_prepostprocess_dropout,
+                    mc_dropout_seed=mc_dropout_seed,
+                    broadcast_dims=dropout_broadcast_dims)
 
   decoder_output = decoder_function(
       decoder_input,
