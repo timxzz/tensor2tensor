@@ -818,8 +818,13 @@ class T2TModel(base.Layer):
         if target_modality == modalities.ModalityType.CLASS_LABEL:
           beam_size = 1  # No use to run beam-search for a single class.
       if beam_size == 1:
-        log_info("Greedy Decoding")
-        results = self._greedy_infer(features, decode_length, use_tpu)
+        if "seq_prob_results" in features:
+          log_info("(Neither Beam Search or Greedy decoding.) "
+            "Decoding towards the seqence prob results for estimating model confidence.")
+          results = self._greedy_infer(features, decode_length, use_tpu, alpha=alpha)
+        else:
+          log_info("Greedy Decoding")
+          results = self._greedy_infer(features, decode_length, use_tpu)
       else:
         log_info("Beam Decoding with beam size %d" % beam_size)
         results = self._beam_decode(features, decode_length, beam_size,
@@ -1705,9 +1710,13 @@ class T2TModel(base.Layer):
     if isinstance(infer_out, dict):
       outputs = infer_out["outputs"]
       scores = infer_out["scores"]
+      log_probs = infer_out["log_probs"]
+      # tpu_debug = infer_out["tpu_debug"]
     else:
       outputs = infer_out
       scores = None
+      log_probs = None
+      # tpu_debug = None
 
     inputs = features.get("inputs")
     if inputs is None:
@@ -1716,6 +1725,8 @@ class T2TModel(base.Layer):
     predictions = {
         "outputs": outputs,
         "scores": scores,
+        "log_probs": log_probs,
+        # "tpu_debug": tpu_debug,
         "inputs": inputs,
         "targets": features.get("infer_targets"),
     }
@@ -1736,6 +1747,10 @@ class T2TModel(base.Layer):
     export_out = {"outputs": predictions["outputs"]}
     if "scores" in predictions:
       export_out["scores"] = predictions["scores"]
+    if "log_probs" in predictions:
+      export_out["log_probs"] = predictions["log_probs"]
+    # if "tpu_debug" in predictions:
+    #   export_out["tpu_debug"] = predictions["tpu_debug"]
 
     # Necessary to rejoin examples in the correct order with the Cloud ML Engine
     # batch prediction API.

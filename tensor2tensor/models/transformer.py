@@ -38,6 +38,8 @@ from tensor2tensor.layers import modalities
 from tensor2tensor.layers import transformer_layers
 from tensor2tensor.layers import transformer_memory
 from tensor2tensor.utils import beam_search
+from tensor2tensor.utils import beam_search_with_prob
+from tensor2tensor.utils import confidence_search
 from tensor2tensor.utils import expert_utils
 from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import registry
@@ -315,7 +317,7 @@ class Transformer(t2t_model.T2TModel):
     else:
       return ret
 
-  def _greedy_infer(self, features, decode_length, use_tpu=False):
+  def _greedy_infer(self, features, decode_length, use_tpu=False, alpha=1.0):
     """Fast version of greedy decoding.
 
     Args:
@@ -341,8 +343,8 @@ class Transformer(t2t_model.T2TModel):
       return super(Transformer, self)._greedy_infer(features, decode_length)
     with tf.variable_scope(self.name):
       if use_tpu:
-        return self._fast_decode_tpu(features, decode_length)
-      return self._fast_decode(features, decode_length)
+        return self._fast_decode_tpu(features, decode_length, alpha=alpha)
+      return self._fast_decode(features, decode_length, alpha=alpha)
 
   def _beam_decode(self,
                    features,
@@ -431,6 +433,7 @@ class Transformer(t2t_model.T2TModel):
     target_vocab_size = self._problem_hparams.vocab_size["targets"]
     if target_vocab_size is not None and hasattr(hparams, "vocab_divisor"):
       target_vocab_size += (-target_vocab_size) % hparams.vocab_divisor
+    seq_prob_results = None
 
     if self.has_input:
       inputs = features["inputs"]
@@ -471,6 +474,10 @@ class Transformer(t2t_model.T2TModel):
       encoder_output = encoder_output[0]
       encoder_decoder_attention_bias = encoder_decoder_attention_bias[0]
       partial_targets = None
+
+      if "seq_prob_results" in features:
+        seq_prob_results = features["seq_prob_results"]
+
     else:
       # The problem has no inputs.
       encoder_output = None
@@ -620,7 +627,8 @@ class Transformer(t2t_model.T2TModel):
         top_beams=top_beams,
         alpha=alpha,
         batch_size=batch_size,
-        force_decode_length=self._decode_hparams.force_decode_length)
+        force_decode_length=self._decode_hparams.force_decode_length, 
+        seq_prob_results=seq_prob_results)
     if partial_targets is not None:
       if beam_size <= 1 or top_beams <= 1:
         ret["outputs"] = ret["outputs"][:, partial_targets_length:]
@@ -672,6 +680,8 @@ class Transformer(t2t_model.T2TModel):
           "Decoding not supported on packed datasets "
           " If you want to decode from a dataset, use the non-packed version"
           " of the dataset when decoding.")
+    seq_prob_results = None
+
     if self.has_input:
       inputs = features["inputs"]
       if target_modality == modalities.ModalityType.CLASS_LABEL:
@@ -711,6 +721,10 @@ class Transformer(t2t_model.T2TModel):
       encoder_output = encoder_output[0]
       encoder_decoder_attention_bias = encoder_decoder_attention_bias[0]
       partial_targets = None
+
+      if "seq_prob_results" in features:
+        seq_prob_results = features["seq_prob_results"]
+
     else:
       # The problem has no inputs.
       encoder_output = None
@@ -839,7 +853,8 @@ class Transformer(t2t_model.T2TModel):
         top_beams=top_beams,
         alpha=alpha,
         batch_size=batch_size,
-        force_decode_length=self._decode_hparams.force_decode_length)
+        force_decode_length=self._decode_hparams.force_decode_length,
+        seq_prob_results=seq_prob_results)
     if partial_targets is not None:
       if beam_size <= 1 or top_beams <= 1:
         ret["outputs"] = ret["outputs"][:, partial_targets_length:]
@@ -862,7 +877,8 @@ def fast_decode_tpu(encoder_output,
                     batch_size=None,
                     force_decode_length=False,
                     scope_prefix="body/",
-                    use_top_k_with_unique=True):
+                    use_top_k_with_unique=True,
+                    seq_prob_results=None):
   """Given encoder output and a symbols to logits function, does fast decoding.
 
   Implements both greedy and beam search decoding for TPU, uses beam search iff
@@ -967,9 +983,9 @@ def fast_decode_tpu(encoder_output,
           "max_decode_length": decode_length
       },
       hparams=hparams)
-  if beam_size > 1:  # Beam Search
+  if beam_size > 1 and seq_prob_results is None:  # Beam Search
     initial_ids = sos_id * tf.ones([batch_size], dtype=tf.int32)
-    decoded_ids, scores, _ = beam_search.beam_search(
+    decoded_ids, scores, _, log_probs = beam_search_with_prob.beam_search(
         symbols_to_logits_fn,
         initial_ids,
         beam_size,
@@ -985,11 +1001,104 @@ def fast_decode_tpu(encoder_output,
     if top_beams == 1:
       decoded_ids = decoded_ids[:, 0, 1:]
       scores = scores[:, 0]
+      log_probs = log_probs[:, 0]
     else:
       decoded_ids = decoded_ids[:, :top_beams, 1:]
       scores = scores[:, :top_beams]
-  else:  # Greedy
+      log_probs = log_probs[:, :top_beams]
+    # tpu_debug=tf.zeros([1], tf.int32)
+  elif seq_prob_results is not None:  # Model Confidence
+    # Modeified from beam search -------------------
+    # model_conf_beam_size = 1
+    # initial_ids = sos_id * tf.ones([batch_size], dtype=tf.int32)
+    # decoded_ids, scores, _ = confidence_search.search(
+    #     symbols_to_logits_fn,
+    #     initial_ids,
+    #     model_conf_beam_size,
+    #     decode_length,
+    #     vocab_size,
+    #     alpha,
+    #     seq_prob_results,
+    #     states=cache,
+    #     eos_id=eos_id,
+    #     stop_early=(top_beams == 1),
+    #     use_tpu=True,
+    #     use_top_k_with_unique=use_top_k_with_unique)
 
+    # decoded_ids = decoded_ids[:, 0, 1:]
+    # scores = scores[:, 0]
+    # tf.logging.info("???????????????????????")
+
+    # Modified from greedy -------------------------
+
+    def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores):
+      """One step of greedy decoding."""
+      logits, cache = symbols_to_logits_fn(next_id, i, cache)
+
+      log_probs = common_layers.log_prob_from_logits(logits)
+      seq_prob_result = tf.gather(seq_prob_results, [i], axis=1)
+      next_id = tf.reshape(seq_prob_result, (batch_size,))
+
+      next_id_log_prob_mask = tf.cast(tf.logical_not(hit_eos), tf.float32)
+      last_hit_eos_mask = tf.cast(hit_eos, tf.float32)
+      hit_eos |= tf.equal(next_id, eos_id)
+
+      log_prob_indices = tf.stack([tf.range(tf.to_int64(batch_size)), next_id],
+                                  axis=1)
+
+      next_id_log_prob = tf.gather_nd(log_probs, log_prob_indices)
+      log_prob += tf.multiply(next_id_log_prob, next_id_log_prob_mask)
+
+      length_penalty = tf.pow(((5. + tf.to_float(i + 1)) / 6.), alpha)
+      tmp_scores = log_prob / length_penalty
+      last_scores = tf.multiply(curr_scores, last_hit_eos_mask)
+      not_hit_scores = tf.multiply(tmp_scores, next_id_log_prob_mask)
+      curr_scores = last_scores + not_hit_scores
+
+      next_id = tf.expand_dims(next_id, axis=1)
+
+      decoded_ids = tf.transpose(decoded_ids)
+      decoded_ids = inplace_ops.alias_inplace_update(
+          decoded_ids, i, tf.squeeze(next_id, axis=1))
+      decoded_ids = tf.transpose(decoded_ids)
+      
+      return i + 1, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores
+
+    def is_not_finished(i, hit_eos, *_):
+      finished = i >= decode_length
+      if not force_decode_length:
+        finished |= tf.reduce_all(hit_eos)
+      return tf.logical_not(finished)
+
+    decoded_ids = tf.zeros([batch_size, decode_length], dtype=tf.int64)
+    hit_eos = tf.fill([batch_size], False)
+    next_id = sos_id * tf.ones([batch_size, 1], dtype=tf.int64)
+    initial_log_prob = tf.zeros([batch_size], dtype=tf.float32)
+    curr_scores = tf.zeros([batch_size], dtype=tf.float32)
+
+    def compute_cache_shape_invariants(tensor):
+      return tf.TensorShape(tensor.shape.as_list())
+
+    _, _, _, decoded_ids, _, log_probs, _, curr_scores = tf.while_loop(
+        is_not_finished,
+        inner_loop, [
+            tf.constant(0), hit_eos, next_id, decoded_ids, cache,
+            initial_log_prob, seq_prob_results, curr_scores
+        ],
+        shape_invariants=[
+            tf.TensorShape([]),
+            tf.TensorShape([batch_size]),
+            tf.TensorShape([batch_size, 1]),
+            tf.TensorShape([batch_size, decode_length]),
+            nest.map_structure(compute_cache_shape_invariants, cache),
+            tf.TensorShape([batch_size]),
+            tf.TensorShape([batch_size, decode_length]),
+            tf.TensorShape([batch_size]),
+        ])
+
+    scores = curr_scores
+    # tpu_debug=tf.zeros([1], tf.int32)
+  else:  # Greedy
     def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob):
       """One step of greedy decoding."""
       logits, cache = symbols_to_logits_fn(next_id, i, cache)
@@ -1043,8 +1152,9 @@ def fast_decode_tpu(encoder_output,
             tf.TensorShape([batch_size]),
         ])
     scores = log_prob
+    # tpu_debug=tf.zeros([1], tf.int32)
 
-  return {"outputs": decoded_ids, "scores": scores}
+  return {"outputs": decoded_ids, "scores": scores, "log_probs": log_probs}
 
 
 def fast_decode(encoder_output,
@@ -1061,7 +1171,8 @@ def fast_decode(encoder_output,
                 batch_size=None,
                 force_decode_length=False,
                 scope_prefix="body/",
-                cache=None):
+                cache=None,
+                seq_prob_results=None):
   """Given encoder output and a symbols to logits function, does fast decoding.
 
   Implements both greedy and beam search decoding, uses beam search iff
@@ -1155,9 +1266,9 @@ def fast_decode(encoder_output,
     cache["encoder_output"] = encoder_output
     cache["encoder_decoder_attention_bias"] = encoder_decoder_attention_bias
 
-  if beam_size > 1:  # Beam Search
+  if beam_size > 1 and seq_prob_results is None:  # Beam Search
     initial_ids = sos_id * tf.ones([batch_size], dtype=tf.int32)
-    decoded_ids, scores, cache = beam_search.beam_search(
+    decoded_ids, scores, cache, log_probs = beam_search_with_prob.beam_search(
         symbols_to_logits_fn,
         initial_ids,
         beam_size,
@@ -1171,9 +1282,76 @@ def fast_decode(encoder_output,
     if top_beams == 1:
       decoded_ids = decoded_ids[:, 0, 1:]
       scores = scores[:, 0]
+      log_probs = log_probs[:, 0]
     else:
       decoded_ids = decoded_ids[:, :top_beams, 1:]
       scores = scores[:, :top_beams]
+      log_probs = log_probs[:, :top_beams]
+  elif seq_prob_results is not None:  # Model Confidence
+    def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores):
+      """One step of greedy decoding."""
+      logits, cache = symbols_to_logits_fn(next_id, i, cache)
+      log_probs = common_layers.log_prob_from_logits(logits)
+      seq_prob_result = tf.gather(seq_prob_results, [i], axis=1)
+      next_id = tf.reshape(seq_prob_result, (batch_size,))
+
+      next_id_log_prob_mask = tf.cast(tf.logical_not(hit_eos), tf.float32)
+      last_hit_eos_mask = tf.cast(hit_eos, tf.float32)
+      hit_eos |= tf.equal(next_id, eos_id)
+
+      log_prob_indices = tf.stack([tf.range(tf.to_int64(batch_size)), next_id],
+                                  axis=1)
+
+      next_id_log_prob = tf.gather_nd(log_probs, log_prob_indices)
+      log_prob += tf.multiply(next_id_log_prob, next_id_log_prob_mask)
+
+      length_penalty = tf.pow(((5. + tf.to_float(i + 1)) / 6.), alpha)
+      tmp_scores = log_prob / length_penalty
+      last_scores = tf.multiply(curr_scores, last_hit_eos_mask)
+      not_hit_scores = tf.multiply(tmp_scores, next_id_log_prob_mask)
+      curr_scores = last_scores + not_hit_scores
+
+      next_id = tf.expand_dims(next_id, axis=1)
+
+      decoded_ids = tf.transpose(decoded_ids)
+      decoded_ids = inplace_ops.alias_inplace_update(
+          decoded_ids, i, tf.squeeze(next_id, axis=1))
+      decoded_ids = tf.transpose(decoded_ids)
+
+      return i + 1, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores
+
+    def is_not_finished(i, hit_eos, *_):
+      finished = i >= decode_length
+      if not force_decode_length:
+        finished |= tf.reduce_all(hit_eos)
+      return tf.logical_not(finished)
+
+    decoded_ids = tf.zeros([batch_size, decode_length], dtype=tf.int64)
+    hit_eos = tf.fill([batch_size], False)
+    next_id = sos_id * tf.ones([batch_size, 1], dtype=tf.int64)
+    initial_log_prob = tf.zeros([batch_size], dtype=tf.float32)
+    curr_scores = tf.zeros([batch_size], dtype=tf.float32)
+
+    def compute_cache_shape_invariants(tensor):
+      return tf.TensorShape(tensor.shape.as_list())
+
+    _, _, _, decoded_ids, _, log_probs, _, curr_scores = tf.while_loop(
+        is_not_finished,
+        inner_loop, [
+            tf.constant(0), hit_eos, next_id, decoded_ids, cache,
+            initial_log_prob, seq_prob_results, curr_scores
+        ],
+        shape_invariants=[
+            tf.TensorShape([]),
+            tf.TensorShape([None]),
+            tf.TensorShape([None, None]),
+            tf.TensorShape([None, None]),
+            nest.map_structure(beam_search.get_state_shape_invariants, cache),
+            tf.TensorShape([None]),
+            tf.TensorShape([None, None]),
+            tf.TensorShape([None]),
+        ])
+    scores = curr_scores
   else:  # Greedy
 
     def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob):
@@ -1222,7 +1400,7 @@ def fast_decode(encoder_output,
         ])
     scores = log_prob
 
-  return {"outputs": decoded_ids, "scores": scores, "cache": cache}
+  return {"outputs": decoded_ids, "scores": scores, "cache": cache, "log_probs": log_probs}
 
 
 @registry.register_model

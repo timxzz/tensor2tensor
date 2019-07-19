@@ -195,7 +195,7 @@ def main(_):
     return
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=10 #------------------------!!!
+  num_MC_samples=2 #------------------------!!!
 
   num_runs = 1
   if FLAGS.mc_sampling:
