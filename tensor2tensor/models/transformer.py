@@ -983,6 +983,7 @@ def fast_decode_tpu(encoder_output,
           "max_decode_length": decode_length
       },
       hparams=hparams)
+  token_log_probs = None
   if beam_size > 1 and seq_prob_results is None:  # Beam Search
     initial_ids = sos_id * tf.ones([batch_size], dtype=tf.int32)
     decoded_ids, scores, _, log_probs = beam_search_with_prob.beam_search(
@@ -1031,7 +1032,7 @@ def fast_decode_tpu(encoder_output,
 
     # Modified from greedy -------------------------
 
-    def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores):
+    def inner_loop(i, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores, token_log_probs):
       """One step of greedy decoding."""
       logits, cache = symbols_to_logits_fn(next_id, i, cache)
 
@@ -1047,7 +1048,8 @@ def fast_decode_tpu(encoder_output,
                                   axis=1)
 
       next_id_log_prob = tf.gather_nd(log_probs, log_prob_indices)
-      log_prob += tf.multiply(next_id_log_prob, next_id_log_prob_mask)
+      masked_next_id_log_prob = tf.multiply(next_id_log_prob, next_id_log_prob_mask)
+      log_prob += masked_next_id_log_prob
 
       length_penalty = tf.pow(((5. + tf.to_float(i + 1)) / 6.), alpha)
       tmp_scores = log_prob / length_penalty
@@ -1061,8 +1063,14 @@ def fast_decode_tpu(encoder_output,
       decoded_ids = inplace_ops.alias_inplace_update(
           decoded_ids, i, tf.squeeze(next_id, axis=1))
       decoded_ids = tf.transpose(decoded_ids)
+
+      masked_next_id_log_prob = tf.expand_dims(masked_next_id_log_prob, axis=1)
+      token_log_probs = tf.transpose(token_log_probs)
+      token_log_probs = inplace_ops.alias_inplace_update(
+          token_log_probs, i, tf.squeeze(masked_next_id_log_prob, axis=1))
+      token_log_probs = tf.transpose(token_log_probs)
       
-      return i + 1, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores
+      return i + 1, hit_eos, next_id, decoded_ids, cache, log_prob, seq_prob_results, curr_scores, token_log_probs
 
     def is_not_finished(i, hit_eos, *_):
       finished = i >= decode_length
@@ -1075,15 +1083,16 @@ def fast_decode_tpu(encoder_output,
     next_id = sos_id * tf.ones([batch_size, 1], dtype=tf.int64)
     initial_log_prob = tf.zeros([batch_size], dtype=tf.float32)
     curr_scores = tf.zeros([batch_size], dtype=tf.float32)
+    token_log_probs = tf.zeros([batch_size, decode_length], dtype=tf.float32)
 
     def compute_cache_shape_invariants(tensor):
       return tf.TensorShape(tensor.shape.as_list())
 
-    _, _, _, decoded_ids, _, log_probs, _, curr_scores = tf.while_loop(
+    _, _, _, decoded_ids, _, log_probs, _, curr_scores, token_log_probs = tf.while_loop(
         is_not_finished,
         inner_loop, [
             tf.constant(0), hit_eos, next_id, decoded_ids, cache,
-            initial_log_prob, seq_prob_results, curr_scores
+            initial_log_prob, seq_prob_results, curr_scores, token_log_probs
         ],
         shape_invariants=[
             tf.TensorShape([]),
@@ -1094,6 +1103,7 @@ def fast_decode_tpu(encoder_output,
             tf.TensorShape([batch_size]),
             tf.TensorShape([batch_size, decode_length]),
             tf.TensorShape([batch_size]),
+            tf.TensorShape([batch_size, decode_length]),
         ])
 
     scores = curr_scores
@@ -1154,7 +1164,7 @@ def fast_decode_tpu(encoder_output,
     scores = log_prob
     # tpu_debug=tf.zeros([1], tf.int32)
 
-  return {"outputs": decoded_ids, "scores": scores, "log_probs": log_probs}
+  return {"outputs": decoded_ids, "scores": scores, "log_probs": log_probs, "token_log_probs": token_log_probs}
 
 
 def fast_decode(encoder_output,

@@ -34,6 +34,7 @@ from __future__ import print_function
 
 import os
 import itertools
+import csv
 from subprocess import call
 
 from tensor2tensor.bin import t2t_trainer
@@ -164,7 +165,8 @@ def main(_):
       decode_hparams=decode_hp,
       use_tpu=FLAGS.use_tpu)
 
-  result, seq_prob_scores, seq_prob_log_probs = decode(estimator, hp, decode_hp, seq_prob_result)
+  result, seq_prob_scores, seq_prob_log_probs, seq_prob_token_log_probs = decode(estimator, hp, decode_hp, seq_prob_result)
+  all_token_log_probs = [seq_prob_token_log_probs]
   # __________________________________________________
   try:
     assert seq_prob_result == result
@@ -195,7 +197,7 @@ def main(_):
   # ==================== Model Confidence Calculation ===================
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=2 #------------------------!!!
+  num_MC_samples=10 #------------------------!!!
 
   mc_scores = np.array([0] * len(seq_prob_scores), dtype=float)
   mc_log_probs = np.array([0] * len(seq_prob_log_probs), dtype=float)
@@ -223,7 +225,8 @@ def main(_):
         decode_hparams=decode_hp,
         use_tpu=FLAGS.use_tpu)
 
-    result, scores, log_probs = decode(estimator, hp, decode_hp, seq_prob_result)
+    result, scores, log_probs, token_log_probs = decode(estimator, hp, decode_hp, seq_prob_result)
+    all_token_log_probs.append(token_log_probs)
     # __________________________________________________
     try:
       assert np.array_equal(seq_prob_result, result)
@@ -293,6 +296,15 @@ def main(_):
 
   accumulated_bleu(reference, decodes, sorted_mc_scores_key, mc_scores, "mc_scores")
   accumulated_bleu(reference, decodes, sorted_mc_log_probs_key, mc_log_probs, "mc_log_probs")
+
+  # ------------ For token log prob ------------------
+  aligned_token_log_probs = [seq for tup in zip(*all_token_log_probs) for seq in tup]
+  csv_filename = FLAGS.decode_to_file + ".tokens_log_probs.csv"
+  tf.logging.info("Writing tokens_log_probs into %s" % csv_filename)
+  outfile = open(csv_filename, "w")
+  writer = csv.writer(outfile)
+  writer.writerows(aligned_token_log_probs)
+  outfile.close()
 
   # num_of_len_subset = 10
   # sorted_hyp_lengths = sorted(hyp_lengths)

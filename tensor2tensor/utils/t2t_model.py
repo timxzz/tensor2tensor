@@ -731,6 +731,11 @@ class T2TModel(base.Layer):
           if key.endswith("dropout") or key == "label_smoothing":
             log_info("Setting hparams.%s to 0.0", key)
             setattr(hparams, key, 0.0)
+        # Change dropout rate ----------------------- !!! ------------> Need to be put into cmd arguements
+        elif key == "layer_prepostprocess_dropout" or key == "relu_dropout":
+          pass
+          # log_info("Setting hparams.%s to 0.0", key)
+          # setattr(hparams, key, 0.0)
 
         # Set dropout dims if measuring uncertainty
         if self._decode_hparams.mc_sampling \
@@ -1712,11 +1717,13 @@ class T2TModel(base.Layer):
       scores = infer_out["scores"]
       log_probs = infer_out["log_probs"]
       # tpu_debug = infer_out["tpu_debug"]
+      token_log_probs = infer_out["token_log_probs"]
     else:
       outputs = infer_out
       scores = None
       log_probs = None
       # tpu_debug = None
+      token_log_probs = None
 
     inputs = features.get("inputs")
     if inputs is None:
@@ -1727,6 +1734,7 @@ class T2TModel(base.Layer):
         "scores": scores,
         "log_probs": log_probs,
         # "tpu_debug": tpu_debug,
+        "token_log_probs": token_log_probs,
         "inputs": inputs,
         "targets": features.get("infer_targets"),
     }
@@ -1751,6 +1759,8 @@ class T2TModel(base.Layer):
       export_out["log_probs"] = predictions["log_probs"]
     # if "tpu_debug" in predictions:
     #   export_out["tpu_debug"] = predictions["tpu_debug"]
+    if "token_log_probs" in predictions:
+      export_out["token_log_probs"] = predictions["token_log_probs"]
 
     # Necessary to rejoin examples in the correct order with the Cloud ML Engine
     # batch prediction API.

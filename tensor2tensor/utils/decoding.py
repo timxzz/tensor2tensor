@@ -703,6 +703,7 @@ def decode_from_file_with_confidence(estimator,
       example = gen_fn()
       return _decode_input_tensor_to_features_dict(example, hparams)
   decodes = []
+  token_log_probs = []
   result_iter = estimator.predict(input_fn, checkpoint_path=checkpoint_path) # ------------------> Branch out to model.infer()
 
   start_time = time.time()
@@ -735,6 +736,7 @@ def decode_from_file_with_confidence(estimator,
     prob_scores.append(result["scores"])
     log_probs.append(result["log_probs"])
 
+    token_log_probs.append(np.trim_zeros(result["token_log_probs"], 'b'))
     _, decoded_outputs, _ = log_decode_results(
         result["inputs"],
         result["outputs"],
@@ -767,12 +769,13 @@ def decode_from_file_with_confidence(estimator,
   decodes = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
   prob_scores = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
   log_probs = [log_probs[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  token_log_probs = [token_log_probs[sorted_keys[index]] for index in range(len(sorted_inputs))]
  
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).
   # Otherwise, use the input filename plus model, hp, problem, beam, alpha.
   # decode_filename = decode_to_file if decode_to_file else filename
-  
+
   # if not decode_to_file:
   #   decode_filename = _decode_filename(decode_filename, problem_name, decode_hp)
   # else:
@@ -799,7 +802,7 @@ def decode_from_file_with_confidence(estimator,
       predictions=list(result_iter)
   ), None)
 
-  return decodes, prob_scores, log_probs
+  return decodes, prob_scores, log_probs, token_log_probs
 
 
 def _add_shard_to_filename(filename, decode_hp):
