@@ -175,11 +175,19 @@ def main(_):
  'Die Narrenzunft Strohglonki (Strohglonki Fools ZunZunZunZunftfeier) beginnt am 8. Februar mit einem traditionellen Zollabend anlässseines 60-jährigen JubilJubilJubilJubilJubilJubilJubil/  Der Harmonie Gutmadingen-MusikVerein wird 90 Jahre alt und am 29. März wird am 29. März zum 60-jährigen JubilJubilJubilJubilJubilJubilJubiljäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjä']
     exc2 = ['Danielle Ockwell, die von Lord beaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaumich für den Schutz von Kindern, weil sie über sein Verhalten besorgt war, bezbezbezeugte, dass sie die YMCA Caringbah Kinder-Service-Manager Jacqui Barnat, die beaubeaubeaubeaubeaubeaubeaubeauAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufs " Lord "sehr einscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinschund und schwierig, um sich viel viel viel zu erreichen, um viel viel zu erreichen, eine Menge Menge Menge von der YMCA Caringbah Kinder-Service-',
  'Die Narrenzunft Strohglonki (Strohglonki Fools ZunZunZunZunftfeier) beginnt am 8. Februar mit einem traditionellen Zollabend anlässseines 60-jährigen JubilJubilJubilJubilJubilJubilJubil/  Der Harmonie Gutmadingen-MusikVerein wird 90 Jahre alt und am 29. März wird am 29. März zum 60-jährigen JubilJubilJubilJubilJubilJubilJubiljäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjä']
+    s_exc1 = ['"Wenn das Werkzeug aus dem Hintergrund getroffen wird, sind die Kommunisierungsbehinderungen wahrscheinlich nicht ordnungsgemäß geschützt, was das Injury-Risiko erhöht", so der Kommentar auf der Injusition der amerikanischen Highic Saffic Behördic Invesition National Highic Behördic Invenbehörde (Haffic Behördungswebsinbehörden) ',
+ 'Befarbens um die Zukunft ihres Landes schwäppte sie ihrem Kunktsattir ein T-Shirt mit dem portugietischsicherheitsportiopolitisitionen sogar, als sie gemeinsam mit der rohrenhafte Bergangssatztir dieses T-Shirts beschnappte, den portugierte "Wir fordern Sicherheit" ',
+ 'Vier weitere Vorschläge bestehen nach wie vor im Wettbewerb um den zweiten L-mission-Ort: ein großes Röntgenteleskon mit dem Namen „Athena", das unter anderem SchwarLöc " Icy Plannets", eine weitere Mission am äußeren Planeten des Sonnensystems, "Sonnentlastsystemsystem, "eine andere Mission mit Sonnenlaste", eine ,,Athena-Röntgenspektakel", die auch "Athenwandtelesk']
+    s_exc2 = ['"Wenn das Werkzeug aus dem Hintergrund getroffen wird, sind die Kommunisierungsbehinderungen wahrscheinlich nicht ordnungsgemäß geschützt, was das Injury-Risiko erhöht", so der Kommentar auf der Injusition der amerikanischen Highic Saffic Behördic Invesition National Highic Behördic Invenbehörde (Haffic Behördungswebsinbehörden)',
+ 'Befarbens um die Zukunft ihres Landes schwäppte sie ihrem Kunktsattir ein T-Shirt mit dem portugietischsicherheitsportiopolitisitionen sogar, als sie gemeinsam mit der rohrenhafte Bergangssatztir dieses T-Shirts beschnappte, den portugierte "Wir fordern Sicherheit"',
+ 'Vier weitere Vorschläge bestehen nach wie vor im Wettbewerb um den zweiten L-mission-Ort: ein großes Röntgenteleskon mit dem Namen „Athena", das unter anderem SchwarLöc " Icy Plannets", eine weitere Mission am äußeren Planeten des Sonnensystems, "Sonnentlastsystemsystem, "eine andere Mission mit Sonnenlaste", eine ,,Athena-Röntgenspektakel", die auch "Athenwandteles']
+
     seq_prob_result = np.array(seq_prob_result).flatten('F')
     result = np.array(result).flatten('F')
     a = np.setdiff1d(seq_prob_result, result)
     b = np.setdiff1d(result, seq_prob_result)
-    if (not np.array_equal(a, np.array(exc1))) or (not np.array_equal(b, np.array(exc2))):
+    # if (not np.array_equal(a, np.array(exc1))) or (not np.array_equal(b, np.array(exc2))):
+    if (not np.array_equal(a, np.array(s_exc1))) or (not np.array_equal(b, np.array(s_exc2))):
       tf.logging.info("a-b")
       tf.logging.info(a)
       tf.logging.info("b-a")
@@ -235,17 +243,25 @@ def main(_):
    'Die Narrenzunft Strohglonki (Strohglonki Fools ZunZunZunZunftfeier) beginnt am 8. Februar mit einem traditionellen Zollabend anlässseines 60-jährigen JubilJubilJubilJubilJubilJubilJubil/  Der Harmonie Gutmadingen-MusikVerein wird 90 Jahre alt und am 29. März wird am 29. März zum 60-jährigen JubilJubilJubilJubilJubilJubilJubiljäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjä']
       exc2 = ['Danielle Ockwell, die von Lord beaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaubeaumich für den Schutz von Kindern, weil sie über sein Verhalten besorgt war, bezbezbezeugte, dass sie die YMCA Caringbah Kinder-Service-Manager Jacqui Barnat, die beaubeaubeaubeaubeaubeaubeaubeauAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufsAufs " Lord "sehr einscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinscheinschund und schwierig, um sich viel viel viel zu erreichen, um viel viel zu erreichen, eine Menge Menge Menge von der YMCA Caringbah Kinder-Service-',
    'Die Narrenzunft Strohglonki (Strohglonki Fools ZunZunZunZunftfeier) beginnt am 8. Februar mit einem traditionellen Zollabend anlässseines 60-jährigen JubilJubilJubilJubilJubilJubilJubil/  Der Harmonie Gutmadingen-MusikVerein wird 90 Jahre alt und am 29. März wird am 29. März zum 60-jährigen JubilJubilJubilJubilJubilJubilJubiljäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjäjä']
-      seq_prob_result = np.array(seq_prob_result).flatten('F')
-      result = np.array(result).flatten('F')
-      a = np.setdiff1d(seq_prob_result, result)
-      b = np.setdiff1d(result, seq_prob_result)
-      if (not np.array_equal(a, np.array(exc1))) or (not np.array_equal(b, np.array(exc2))):
-        tf.logging.info("a-b")
-        tf.logging.info(a)
-        tf.logging.info("b-a")
-        tf.logging.info(b)
-        tf.logging.info(print("Assertion error line 169"))
-        exit(1)
+      s_exc1 = ['"Wenn das Werkzeug aus dem Hintergrund getroffen wird, sind die Kommunisierungsbehinderungen wahrscheinlich nicht ordnungsgemäß geschützt, was das Injury-Risiko erhöht", so der Kommentar auf der Injusition der amerikanischen Highic Saffic Behördic Invesition National Highic Behördic Invenbehörde (Haffic Behördungswebsinbehörden) ',
+ 'Befarbens um die Zukunft ihres Landes schwäppte sie ihrem Kunktsattir ein T-Shirt mit dem portugietischsicherheitsportiopolitisitionen sogar, als sie gemeinsam mit der rohrenhafte Bergangssatztir dieses T-Shirts beschnappte, den portugierte "Wir fordern Sicherheit" ',
+ 'Vier weitere Vorschläge bestehen nach wie vor im Wettbewerb um den zweiten L-mission-Ort: ein großes Röntgenteleskon mit dem Namen „Athena", das unter anderem SchwarLöc " Icy Plannets", eine weitere Mission am äußeren Planeten des Sonnensystems, "Sonnentlastsystemsystem, "eine andere Mission mit Sonnenlaste", eine ,,Athena-Röntgenspektakel", die auch "Athenwandtelesk']
+      s_exc2 = ['"Wenn das Werkzeug aus dem Hintergrund getroffen wird, sind die Kommunisierungsbehinderungen wahrscheinlich nicht ordnungsgemäß geschützt, was das Injury-Risiko erhöht", so der Kommentar auf der Injusition der amerikanischen Highic Saffic Behördic Invesition National Highic Behördic Invenbehörde (Haffic Behördungswebsinbehörden)',
+ 'Befarbens um die Zukunft ihres Landes schwäppte sie ihrem Kunktsattir ein T-Shirt mit dem portugietischsicherheitsportiopolitisitionen sogar, als sie gemeinsam mit der rohrenhafte Bergangssatztir dieses T-Shirts beschnappte, den portugierte "Wir fordern Sicherheit"',
+ 'Vier weitere Vorschläge bestehen nach wie vor im Wettbewerb um den zweiten L-mission-Ort: ein großes Röntgenteleskon mit dem Namen „Athena", das unter anderem SchwarLöc " Icy Plannets", eine weitere Mission am äußeren Planeten des Sonnensystems, "Sonnentlastsystemsystem, "eine andere Mission mit Sonnenlaste", eine ,,Athena-Röntgenspektakel", die auch "Athenwandteles']
+
+    seq_prob_result = np.array(seq_prob_result).flatten('F')
+    result = np.array(result).flatten('F')
+    a = np.setdiff1d(seq_prob_result, result)
+    b = np.setdiff1d(result, seq_prob_result)
+    # if (not np.array_equal(a, np.array(exc1))) or (not np.array_equal(b, np.array(exc2))):
+    if (not np.array_equal(a, np.array(s_exc1))) or (not np.array_equal(b, np.array(s_exc2))):
+      tf.logging.info("a-b")
+      tf.logging.info(a)
+      tf.logging.info("b-a")
+      tf.logging.info(b)
+      tf.logging.info(print("Assertion error line 169"))
+      exit(1)
     # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     mc_scores += np.array(scores).flatten('F')
