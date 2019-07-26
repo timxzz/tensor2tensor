@@ -2357,6 +2357,15 @@ def transformer_tpu():
   update_hparams_for_tpu(hparams)
   return hparams
 
+@registry.register_hparams
+def transformer_tpu_dr2():
+  """HParams for Transformer model on TPU with dropout rate 0.2."""
+  hparams = transformer_base()
+  hparams.layer_prepostprocess_dropout = 0.2
+  hparams.relu_dropout = 0.2
+  update_hparams_for_tpu(hparams)
+  return hparams
+
 
 @registry.register_hparams
 def transformer_timeseries_tpu():
