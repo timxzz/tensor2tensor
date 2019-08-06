@@ -340,7 +340,7 @@ class Text2TextProblem(problem.Problem):
     """String to prepend to targets before tokenization."""
     return ""
 
-  def generate_data(self, data_dir, tmp_dir, task_id=-1):
+  def generate_data(self, data_dir, tmp_dir, task_id=-1, max_cases=None):
 
     filepath_fns = {
         problem.DatasetSplit.TRAIN: self.training_filepaths,
@@ -358,7 +358,8 @@ class Text2TextProblem(problem.Problem):
     if self.is_generate_per_split:
       for split, paths in split_paths:
         generator_utils.generate_files(
-            self.generate_encoded_samples(data_dir, tmp_dir, split), paths)
+            self.generate_encoded_samples(data_dir, tmp_dir, split), paths,
+            max_cases=max_cases)
     else:
       generator_utils.generate_files(
           self.generate_encoded_samples(

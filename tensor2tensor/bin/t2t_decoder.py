@@ -195,7 +195,7 @@ def main(_):
     return
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=2 #------------------------!!!
+  num_MC_samples=10 #------------------------!!!
 
   num_runs = 1
   if FLAGS.mc_sampling:
@@ -223,7 +223,7 @@ def main(_):
         decode_hparams=decode_hp,
         use_tpu=FLAGS.use_tpu)
 
-    result, prob_scores = decode(estimator, hp, decode_hp)
+    result, prob_scores, _ = decode(estimator, hp, decode_hp)
     if not (FLAGS.mc_sampling or decode_hp.uncertainty_over_prob):
       return
     results.append(result)

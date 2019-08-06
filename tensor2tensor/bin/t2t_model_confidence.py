@@ -197,7 +197,7 @@ def main(_):
   # ==================== Model Confidence Calculation ===================
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=20 #------------------------!!!
+  num_MC_samples=10 #------------------------!!!
 
   mc_scores = np.array([0] * len(seq_prob_scores), dtype=float)
   mc_log_probs = np.array([0] * len(seq_prob_log_probs), dtype=float)

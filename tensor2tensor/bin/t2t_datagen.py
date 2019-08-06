@@ -298,7 +298,8 @@ def generate_data_for_registered_problem(problem_name):
             for task_id in range(task_id_start, task_id_end)]
     pool.map(generate_data_in_process, args)
   else:
-    problem.generate_data(data_dir, tmp_dir, task_id)
+    max_cases = None if FLAGS.max_cases == 0 else FLAGS.max_cases
+    problem.generate_data(data_dir, tmp_dir, task_id, max_cases=max_cases)
 
 
 if __name__ == "__main__":
