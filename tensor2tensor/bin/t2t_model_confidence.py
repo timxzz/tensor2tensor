@@ -129,7 +129,7 @@ def accumulated_bleu(reference, decodes, sorted_key, uncertainty, name):
 
   individual_bleus = []
   for (ref, hyp) in zip(ref_tokens, hyp_tokens):
-    individual_bleu = 100 * bleu_hook.compute_bleu(ref, hyp)
+    individual_bleu = 100 * bleu_hook.compute_bleu([ref], [hyp])
     individual_bleus.append(individual_bleu)
 
   csv_filename = FLAGS.decode_to_file + "." + name + ".csv"
