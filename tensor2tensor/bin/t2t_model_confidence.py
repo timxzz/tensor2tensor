@@ -35,6 +35,7 @@ from __future__ import print_function
 import os
 import itertools
 import csv
+import math
 from subprocess import call
 
 from tensor2tensor.bin import t2t_trainer
@@ -197,10 +198,11 @@ def main(_):
   # ==================== Model Confidence Calculation ===================
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=10 #------------------------!!!
+  num_MC_samples=3 #------------------------!!!
 
   mc_scores = np.array([0] * len(seq_prob_scores), dtype=float)
   mc_log_probs = np.array([0] * len(seq_prob_log_probs), dtype=float)
+  mc_token_log_probs = []
 
   mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
   # mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
@@ -227,6 +229,14 @@ def main(_):
 
     result, scores, log_probs, token_log_probs = decode(estimator, hp, decode_hp, seq_prob_result)
     all_token_log_probs.append(token_log_probs)
+
+    if i == 0:
+      mc_token_log_probs = token_log_probs
+    else:
+      tmp = []
+      for (old, new) in zip(mc_token_log_probs, token_log_probs):
+        tmp.append(np.logaddexp(old, new))
+      mc_token_log_probs = tmp
     # __________________________________________________
     try:
       assert np.array_equal(seq_prob_result, result)
@@ -242,11 +252,20 @@ def main(_):
       tf.logging.info(print("Assertion error line 242"))
     # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    mc_scores += np.array(scores).flatten('F')
-    mc_log_probs += np.array(log_probs).flatten('F')
+    mc_scores += np.array(scores).flatten('F') #!!!!!!!!!!!!!!!!!!!!!!!!! NOT '+' at log scale
+    mc_log_probs += np.array(log_probs).flatten('F') #!!!!!!!!!!!!!!!!!!!!!!!!! NOT '+' at log scale
 
   mc_scores = mc_scores / num_MC_samples
   mc_log_probs = mc_log_probs / num_MC_samples
+
+  # For (1/N)sum(p[t1_i]) * (1/N)sum(p[t2_i|t1_i]) ...
+  mc_token_scores = []
+  for mc_token_log_prob in mc_token_log_probs:
+    alpha=0.6
+    seq_length = mc_token_log_prob.size
+    length_penalty = pow(((5. + float(seq_length)) / 6.), alpha)
+    sum_mc_token_log_prob = np.sum(mc_token_log_prob) + seq_length * math.log(1. / num_MC_samples)
+    mc_token_scores.append(sum_mc_token_log_prob / length_penalty)
 
   tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
   tf.logging.info(mc_dropout_seeds.tolist())
@@ -264,7 +283,10 @@ def main(_):
 
   tf.logging.info("Ordering the seqence prob result by MC scores and MC log probs.")
   sorted_mc_scores_key = sorted(range(len(mc_scores)), key=lambda k: mc_scores[k], reverse=True)
-  sorted_mc_log_probs_key = sorted(range(len(mc_log_probs)), key=lambda k: mc_log_probs[k], reverse=True)  
+  sorted_mc_log_probs_key = sorted(range(len(mc_log_probs)), key=lambda k: mc_log_probs[k], reverse=True)
+
+  tf.logging.info("Ordering the seqence prob result by MC scores approximated on token level")
+  sorted_mc_token_scores_key = sorted(range(len(mc_token_scores)), key=lambda k: mc_token_scores[k], reverse=True)
 
   # Reorder according to the sorted scores and log probs
   bs_scores = [bs_scores[sorted_bs_scores_key[index]] for index in range(len(sorted_bs_scores_key))]
@@ -275,6 +297,8 @@ def main(_):
 
   mc_scores = [mc_scores[sorted_mc_scores_key[index]] for index in range(len(sorted_mc_scores_key))]
   mc_log_probs = [mc_log_probs[sorted_mc_log_probs_key[index]] for index in range(len(sorted_mc_log_probs_key))]
+
+  mc_token_scores = [mc_token_scores[sorted_mc_token_scores_key[index]] for index in range(len(sorted_mc_token_scores_key))]
 
 
   # ------------ For accumulated BLEU ------------------
@@ -290,6 +314,8 @@ def main(_):
 
   accumulated_bleu(reference, decodes, sorted_mc_scores_key, mc_scores, "mc_scores")
   accumulated_bleu(reference, decodes, sorted_mc_log_probs_key, mc_log_probs, "mc_log_probs")
+
+  accumulated_bleu(reference, decodes, sorted_mc_token_scores_key, mc_token_scores, "mc_token_scores")
 
   # ------------ For token log prob ------------------
   aligned_token_log_probs = [seq for tup in zip(*all_token_log_probs) for seq in tup]
