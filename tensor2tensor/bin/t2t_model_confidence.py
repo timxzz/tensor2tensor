@@ -198,11 +198,12 @@ def main(_):
   # ==================== Model Confidence Calculation ===================
 
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
-  num_MC_samples=3 #------------------------!!!
+  num_MC_samples=10 #------------------------!!!
 
   mc_scores = np.array([0] * len(seq_prob_scores), dtype=float)
   mc_log_probs = np.array([0] * len(seq_prob_log_probs), dtype=float)
   mc_token_log_probs = []
+  alpha=0.6
 
   mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
   # mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
@@ -232,11 +233,14 @@ def main(_):
 
     if i == 0:
       mc_token_log_probs = token_log_probs
+      mc_log_probs += np.array(log_probs).flatten('F')
     else:
       tmp = []
       for (old, new) in zip(mc_token_log_probs, token_log_probs):
         tmp.append(np.logaddexp(old, new))
       mc_token_log_probs = tmp
+      mc_log_probs = np.logaddexp(mc_log_probs, np.array(log_probs).flatten('F'))
+
     # __________________________________________________
     try:
       assert np.array_equal(seq_prob_result, result)
@@ -252,20 +256,27 @@ def main(_):
       tf.logging.info(print("Assertion error line 242"))
     # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    mc_scores += np.array(scores).flatten('F') #!!!!!!!!!!!!!!!!!!!!!!!!! NOT '+' at log scale
-    mc_log_probs += np.array(log_probs).flatten('F') #!!!!!!!!!!!!!!!!!!!!!!!!! NOT '+' at log scale
+    # mc_scores += np.array(scores).flatten('F') #!!!!!!!!!!!!!!!!!!!!!!!!! NOT '+' at log scale
+    # mc_log_probs += np.array(log_probs).flatten('F')
 
-  mc_scores = mc_scores / num_MC_samples
-  mc_log_probs = mc_log_probs / num_MC_samples
+  # mc_scores = mc_scores / num_MC_samples
+  # mc_log_probs = mc_log_probs / num_MC_samples
+  mc_log_probs += math.log(1. / num_MC_samples)
 
   # For (1/N)sum(p[t1_i]) * (1/N)sum(p[t2_i|t1_i]) ...
   mc_token_scores = []
+  seq_lengths = []
   for mc_token_log_prob in mc_token_log_probs:
-    alpha=0.6
     seq_length = mc_token_log_prob.size
+    seq_lengths.append(seq_length)
     length_penalty = pow(((5. + float(seq_length)) / 6.), alpha)
     sum_mc_token_log_prob = np.sum(mc_token_log_prob) + seq_length * math.log(1. / num_MC_samples)
     mc_token_scores.append(sum_mc_token_log_prob / length_penalty)
+
+  # For (1/N)sum(p[t1_i]*p[t2_i|t1_1] ... )
+  for j in range(len(seq_lengths)):
+    length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
+    mc_scores[j] = mc_log_probs[j] / length_penalty
 
   tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
   tf.logging.info(mc_dropout_seeds.tolist())
