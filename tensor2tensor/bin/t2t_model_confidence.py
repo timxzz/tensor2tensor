@@ -203,6 +203,7 @@ def main(_):
   mc_scores = np.array([0] * len(seq_prob_scores), dtype=float)
   mc_log_probs = np.array([0] * len(seq_prob_log_probs), dtype=float)
   mc_token_log_probs = []
+  mc_scores_set = []
   alpha=0.6
 
   mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
@@ -234,12 +235,14 @@ def main(_):
     if i == 0:
       mc_token_log_probs = token_log_probs
       mc_log_probs += np.array(log_probs).flatten('F')
+      mc_scores_set = np.array(scores).flatten('F')
     else:
       tmp = []
       for (old, new) in zip(mc_token_log_probs, token_log_probs):
         tmp.append(np.logaddexp(old, new))
       mc_token_log_probs = tmp
       mc_log_probs = np.logaddexp(mc_log_probs, np.array(log_probs).flatten('F'))
+      mc_scores_set = np.vstack((mc_scores_set, np.array(scores).flatten('F')))
 
     # __________________________________________________
     try:
@@ -262,6 +265,11 @@ def main(_):
   # mc_scores = mc_scores / num_MC_samples
   # mc_log_probs = mc_log_probs / num_MC_samples
   mc_log_probs += math.log(1. / num_MC_samples)
+
+  # es = np.full(mc_scores_set.shape, math.e)
+  # mc_scores_set_e_pow = np.power(es, mc_scores_set)
+  p_var = np.var(mc_scores_set, axis=0)
+  log_p_var = np.log(p_var)
 
   # For (1/N)sum(p[t1_i]) * (1/N)sum(p[t2_i|t1_i]) ...
   mc_token_scores = []
@@ -299,6 +307,9 @@ def main(_):
   tf.logging.info("Ordering the seqence prob result by MC scores approximated on token level")
   sorted_mc_token_scores_key = sorted(range(len(mc_token_scores)), key=lambda k: mc_token_scores[k], reverse=True)
 
+  tf.logging.info("Ordering the seqence prob result by log (seq_prob variance)")
+  sorted_log_p_var_key = sorted(range(len(log_p_var)), key=lambda k: log_p_var[k])
+
   # Reorder according to the sorted scores and log probs
   bs_scores = [bs_scores[sorted_bs_scores_key[index]] for index in range(len(sorted_bs_scores_key))]
   bs_log_probs = [bs_log_probs[sorted_bs_log_probs_key[index]] for index in range(len(sorted_bs_log_probs_key))]
@@ -310,6 +321,8 @@ def main(_):
   mc_log_probs = [mc_log_probs[sorted_mc_log_probs_key[index]] for index in range(len(sorted_mc_log_probs_key))]
 
   mc_token_scores = [mc_token_scores[sorted_mc_token_scores_key[index]] for index in range(len(sorted_mc_token_scores_key))]
+
+  log_p_var = [log_p_var[sorted_log_p_var_key[index]] for index in range(len(sorted_log_p_var_key))]
 
 
   # ------------ For accumulated BLEU ------------------
@@ -327,6 +340,8 @@ def main(_):
   accumulated_bleu(reference, decodes, sorted_mc_log_probs_key, mc_log_probs, "mc_log_probs")
 
   accumulated_bleu(reference, decodes, sorted_mc_token_scores_key, mc_token_scores, "mc_token_scores")
+
+  accumulated_bleu(reference, decodes, sorted_log_p_var_key, log_p_var, "log_p_var")
 
   # ------------ For token log prob ------------------
   aligned_token_log_probs = [seq for tup in zip(*all_token_log_probs) for seq in tup]
