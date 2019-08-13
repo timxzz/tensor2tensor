@@ -286,6 +286,11 @@ def main(_):
     length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
     mc_scores[j] = mc_log_probs[j] / length_penalty
 
+  if decode_hp.beam_size == 1:
+    for j in range(len(seq_lengths)):
+      length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
+      bs_scores[j] = bs_log_probs[j] / length_penalty
+
   tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
   tf.logging.info(mc_dropout_seeds.tolist())
   

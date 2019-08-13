@@ -1147,7 +1147,7 @@ def fast_decode_tpu(encoder_output,
     def compute_cache_shape_invariants(tensor):
       return tf.TensorShape(tensor.shape.as_list())
 
-    _, _, _, decoded_ids, _, log_prob = tf.while_loop(
+    _, _, _, decoded_ids, _, log_probs = tf.while_loop(
         is_not_finished,
         inner_loop, [
             tf.constant(0), hit_eos, next_id, decoded_ids, cache,
@@ -1161,7 +1161,8 @@ def fast_decode_tpu(encoder_output,
             nest.map_structure(compute_cache_shape_invariants, cache),
             tf.TensorShape([batch_size]),
         ])
-    scores = log_prob
+    scores = log_probs
+    token_log_probs = None
     # tpu_debug=tf.zeros([1], tf.int32)
 
   return {"outputs": decoded_ids, "scores": scores, "log_probs": log_probs, "token_log_probs": token_log_probs}
