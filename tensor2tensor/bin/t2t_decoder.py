@@ -80,7 +80,7 @@ def create_hparams(mc_dropout_seed=None):
       problem_name=FLAGS.problem)
 
 
-def create_decode_hparams():
+def create_decode_hparams(mc_sampling=False):
   decode_hp = decoding.decode_hparams(FLAGS.decode_hparams)
   decode_hp.shards = FLAGS.decode_shards
   decode_hp.shard_id = FLAGS.worker_id
@@ -88,7 +88,7 @@ def create_decode_hparams():
   decode_hp.decode_in_memory = decode_in_memory
   decode_hp.decode_to_file = FLAGS.decode_to_file
   decode_hp.decode_reference = FLAGS.decode_reference
-  decode_hp.mc_sampling = FLAGS.mc_sampling
+  decode_hp.mc_sampling = mc_sampling
   return decode_hp
 
 
@@ -194,6 +194,18 @@ def main(_):
     write_file.close()
     return
 
+  # hp = create_hparams()
+  # decode_hp = create_decode_hparams()
+
+  # estimator = trainer_lib.create_estimator(
+  #     FLAGS.model,
+  #     hp,
+  #     t2t_trainer.create_run_config(hp),
+  #     decode_hparams=decode_hp,
+  #     use_tpu=FLAGS.use_tpu)
+
+  # mle_result, _, _ = decode(estimator, hp, decode_hp)
+
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-> hp
   num_MC_samples=10 #------------------------!!!
 
@@ -203,8 +215,8 @@ def main(_):
 
   results = []
   probs = []
-  mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
-  # mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
+  # mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
+  mc_dropout_seeds = np.array([[963161, 57822], [4079, 408351], [831960, 391823], [536474, 973488], [306481, 730954], [999606, 639192], [354619, 782949], [740518, 829690], [529201, 462722], [868498, 15792]])
   # mc_dropout_seeds = np.array([[853751, 85362], [853751, 85362]])
   for i in range(num_runs):
 
@@ -214,7 +226,7 @@ def main(_):
       mc_dropout_seed = mc_dropout_seeds[i]
 
     hp = create_hparams(mc_dropout_seed=mc_dropout_seed)
-    decode_hp = create_decode_hparams()
+    decode_hp = create_decode_hparams(mc_sampling=FLAGS.mc_sampling)
 
     estimator = trainer_lib.create_estimator(
         FLAGS.model,
@@ -261,6 +273,7 @@ def main(_):
         mean_bleu_sums[j] += b
       index_mean = min(range(len(mean_bleu_sums)), key=mean_bleu_sums.__getitem__)
       mean_samples.append(one_batch[index_mean])
+      # mean_samples = mle_result
       bleu_MC_batchs.append(bleu_MC_batch)
 
     bleu_square = np.array(bleu_MC_batchs) ** 2
@@ -312,7 +325,7 @@ def main(_):
                   "target output.") 
   individual_bleus = []
   for (ref, hyp) in zip(ref_tokens, hyp_tokens):
-    individual_bleu = 100 * bleu_hook.compute_bleu(ref, hyp)
+    individual_bleu = 100 * bleu_hook.compute_bleu([ref], [hyp])
     individual_bleus.append(individual_bleu)
 
   csv_filename = ""

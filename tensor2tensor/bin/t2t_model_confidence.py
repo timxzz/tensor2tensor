@@ -206,8 +206,8 @@ def main(_):
   mc_scores_set = []
   alpha=0.6
 
-  mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
-  # mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
+  # mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
+  mc_dropout_seeds = np.array([[963161, 57822], [4079, 408351], [831960, 391823], [536474, 973488], [306481, 730954], [999606, 639192], [354619, 782949], [740518, 829690], [529201, 462722], [868498, 15792]])
   # mc_dropout_seeds = np.array([[853751, 85362], [853751, 85362]])
   for i in range(num_MC_samples):
 
@@ -286,10 +286,10 @@ def main(_):
     length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
     mc_scores[j] = mc_log_probs[j] / length_penalty
 
-  if decode_hp.beam_size == 1:
-    for j in range(len(seq_lengths)):
-      length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
-      bs_scores[j] = bs_log_probs[j] / length_penalty
+  # if FLAGS.beam_size == 1:
+  #   for j in range(len(seq_lengths)):
+  #     length_penalty = pow(((5. + float(seq_lengths[j])) / 6.), alpha)
+  #     bs_scores[j] = bs_log_probs[j] / length_penalty
 
   tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
   tf.logging.info(mc_dropout_seeds.tolist())
