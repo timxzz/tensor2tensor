@@ -39,7 +39,6 @@ from tensor2tensor.layers import transformer_layers
 from tensor2tensor.layers import transformer_memory
 from tensor2tensor.utils import beam_search
 from tensor2tensor.utils import beam_search_with_prob
-from tensor2tensor.utils import confidence_search
 from tensor2tensor.utils import expert_utils
 from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import registry
