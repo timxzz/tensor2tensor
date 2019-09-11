@@ -897,7 +897,7 @@ def layer_prepostprocess(previous_value,
     return x
 
 
-def layer_preprocess(layer_input, hparams, layer_collection=None):
+def layer_preprocess(layer_input, hparams, layer_collection=None, mc_dropout_seed=None):
   """Apply layer preprocessing.
 
   See layer_prepostprocess() for details.
@@ -925,10 +925,6 @@ def layer_preprocess(layer_input, hparams, layer_collection=None):
   assert "z" not in hparams.layer_preprocess_sequence, (
       "No residual connections allowed in hparams.layer_preprocess_sequence")
 
-  mc_dropout_seed = None
-  if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
-
   return layer_prepostprocess(
       None,
       layer_input,
@@ -944,7 +940,7 @@ def layer_preprocess(layer_input, hparams, layer_collection=None):
       mc_dropout_seed=mc_dropout_seed)
 
 
-def layer_postprocess(layer_input, layer_output, hparams):
+def layer_postprocess(layer_input, layer_output, hparams, mc_dropout_seed=None):
   """Apply layer postprocessing.
 
   See layer_prepostprocess() for details.
@@ -966,9 +962,6 @@ def layer_postprocess(layer_input, layer_output, hparams):
   Returns:
     a Tensor
   """
-  mc_dropout_seed = None
-  if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
 
   return layer_prepostprocess(
       layer_input,

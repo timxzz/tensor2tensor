@@ -124,7 +124,8 @@ def transformer_encoder(encoder_input,
                         save_weights_to=None,
                         make_image_summary=True,
                         losses=None,
-                        attn_bias_for_padding=None):
+                        attn_bias_for_padding=None,
+                        mc_dropout_seed=None):
   """A stack of transformer layers.
 
   Args:
@@ -184,7 +185,7 @@ def transformer_encoder(encoder_input,
       with tf.variable_scope("layer_%d" % layer):
         with tf.variable_scope("self_attention"):
           y = common_attention.multihead_attention(
-              common_layers.layer_preprocess(x, hparams),
+              common_layers.layer_preprocess(x, hparams, mc_dropout_seed=mc_dropout_seed),
               None,
               encoder_self_attention_bias,
               hparams.attention_key_channels or hparams.hidden_size,
@@ -205,23 +206,24 @@ def transformer_encoder(encoder_input,
               activation_dtype=hparams.get("activation_dtype", "float32"),
               weight_dtype=hparams.get("weight_dtype", "float32"),
               hard_attention_k=hparams.get("hard_attention_k", 0))
-          x = common_layers.layer_postprocess(x, y, hparams)
+          x = common_layers.layer_postprocess(x, y, hparams, mc_dropout_seed=mc_dropout_seed)
         with tf.variable_scope("ffn"):
           y = transformer_ffn_layer(
-              common_layers.layer_preprocess(x, hparams),
+              common_layers.layer_preprocess(x, hparams, mc_dropout_seed=mc_dropout_seed),
               hparams,
               pad_remover,
               conv_padding="SAME",
               nonpadding_mask=nonpadding,
-              losses=losses)
-          x = common_layers.layer_postprocess(x, y, hparams)
+              losses=losses,
+              mc_dropout_seed=mc_dropout_seed)
+          x = common_layers.layer_postprocess(x, y, hparams, mc_dropout_seed=mc_dropout_seed)
     # if normalization is done in layer_preprocess, then it should also be done
     # on the output, since the output can grow very large, being the sum of
     # a whole stack of unnormalized layer outputs.
     mlperf_log.transformer_print(
         key=mlperf_log.MODEL_HP_NORM,
         value={"hidden_size": hparams.hidden_size})
-    return common_layers.layer_preprocess(x, hparams)
+    return common_layers.layer_preprocess(x, hparams, mc_dropout_seed=mc_dropout_seed)
 
 
 def transformer_ffn_layer(x,
@@ -233,7 +235,8 @@ def transformer_ffn_layer(x,
                           cache=None,
                           decode_loop_step=None,
                           readout_filter_size=0,
-                          layer_collection=None):
+                          layer_collection=None,
+                          mc_dropout_seed=None):
   """Feed-forward layer in the transformer.
 
   Args:
@@ -265,9 +268,6 @@ def transformer_ffn_layer(x,
     ValueError: If losses arg is None, but layer generates extra losses.
   """
   ffn_layer = hparams.ffn_layer
-  mc_dropout_seed = None
-  if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
   relu_dropout_broadcast_dims = (
       common_layers.comma_separated_string_to_integer_list(
           getattr(hparams, "relu_dropout_broadcast_dims", "")))

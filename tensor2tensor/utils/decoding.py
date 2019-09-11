@@ -618,6 +618,173 @@ def decode_from_file(estimator,
   return decodes, prob_scores, log_probs
 
 
+
+def decode_from_file_mc_token(estimator,
+                             filename,
+                             hparams,
+                             decode_hp,
+                             decode_to_file=None,
+                             checkpoint_path=None):
+
+  prob_scores=[] # only for uncertainty of beam probs
+  log_probs=[]
+
+  """Compute predictions on entries in filename and write them out."""
+  if not decode_hp.batch_size:
+    decode_hp.batch_size = 32
+    tf.logging.info(
+        "decode_hp.batch_size not specified; default=%d" % decode_hp.batch_size)
+
+  # Inputs vocabulary is set to targets if there are no inputs in the problem,
+  # e.g., for language models where the inputs are just a prefix of targets.
+  p_hp = hparams.problem_hparams
+  has_input = "inputs" in p_hp.vocabulary
+  inputs_vocab_key = "inputs" if has_input else "targets"
+  inputs_vocab = p_hp.vocabulary[inputs_vocab_key]
+  targets_vocab = p_hp.vocabulary["targets"]
+  problem_name = FLAGS.problem
+  filename = _add_shard_to_filename(filename, decode_hp)
+  tf.logging.info("Performing decoding from file (%s)." % filename)
+  if has_input:
+    sorted_inputs, sorted_keys = _get_sorted_inputs(
+        filename, decode_hp.delimiter)
+  else:
+    sorted_inputs = _get_language_modeling_inputs(
+        filename, decode_hp.delimiter, repeat=decode_hp.num_decodes)
+    sorted_keys = range(len(sorted_inputs))
+  num_sentences = len(sorted_inputs)
+  num_decode_batches = (num_sentences - 1) // decode_hp.batch_size + 1
+
+  def input_fn():
+    input_gen = _decode_batch_input_fn(
+        num_decode_batches, sorted_inputs,
+        inputs_vocab, decode_hp.batch_size,
+        decode_hp.max_input_size,
+        task_id=decode_hp.multiproblem_task_id, has_input=has_input)
+    gen_fn = make_input_fn_from_generator(input_gen)
+    example = gen_fn()
+    return _decode_input_tensor_to_features_dict(example, hparams)
+  decodes = []
+  result_iter = estimator.predict(input_fn, checkpoint_path=checkpoint_path)
+
+  start_time = time.time()
+  total_time_per_step = 0
+  total_cnt = 0
+
+  def timer(gen):
+    while True:
+      try:
+        start_time = time.time()
+        item = next(gen)
+        elapsed_time = time.time() - start_time
+        yield elapsed_time, item
+      except StopIteration:
+        break
+
+  for elapsed_time, result in timer(result_iter):
+    if decode_hp.return_beams:
+      beam_decodes = []
+      beam_scores = []
+      output_beams = np.split(result["outputs"], decode_hp.beam_size, axis=0)
+      scores = None
+      if "scores" in result:
+        if np.isscalar(result["scores"]):
+          result["scores"] = result["scores"].reshape(1)
+        scores = np.split(result["scores"], decode_hp.beam_size, axis=0)
+      for k, beam in enumerate(output_beams):
+        tf.logging.info("BEAM %d:" % k)
+        score = scores and scores[k]
+        _, decoded_outputs, _ = log_decode_results(
+            result["inputs"],
+            beam,
+            problem_name,
+            None,
+            inputs_vocab,
+            targets_vocab,
+            log_results=decode_hp.log_results,
+            skip_eos_postprocess=decode_hp.skip_eos_postprocess)
+        beam_decodes.append(decoded_outputs)
+        if decode_hp.write_beam_scores:
+          beam_scores.append(score)
+      if decode_hp.write_beam_scores:
+        decodes.append("\t".join([
+            "\t".join([d, "%.2f" % s])
+            for d, s in zip(beam_decodes, beam_scores)
+        ]))
+      else:
+        decodes.append("\t".join(beam_decodes))
+    else:
+      # tf.logging.info(result["log_probs"])
+      # tf.logging.info(result["tpu_debug"])
+      _, decoded_outputs, _ = log_decode_results(
+          result["inputs"],
+          result["outputs"],
+          problem_name,
+          None,
+          inputs_vocab,
+          targets_vocab,
+          log_results=decode_hp.log_results,
+          skip_eos_postprocess=decode_hp.skip_eos_postprocess)
+      decodes.append(decoded_outputs)
+    total_time_per_step += elapsed_time
+    total_cnt += result["outputs"].shape[-1]
+
+  duration = time.time() - start_time
+  tf.logging.info("Elapsed Time: %5.5f" % duration)
+  tf.logging.info("Averaged Single Token Generation Time: %5.7f "
+                  "(time %5.7f count %d)" %
+                  (total_time_per_step / total_cnt,
+                   total_time_per_step, total_cnt))
+  if decode_hp.batch_size == 1:
+    tf.logging.info("Inference time %.4f seconds "
+                    "(Latency = %.4f ms/setences)" %
+                    (duration, 1000.0*duration/num_sentences))
+  else:
+    tf.logging.info("Inference time %.4f seconds "
+                    "(Throughput = %.4f sentences/second)" %
+                    (duration, num_sentences/duration))
+
+  # Reorder
+  decodes = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  if decode_hp.uncertainty_over_prob:
+    prob_scores = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
+    log_probs = [log_probs[sorted_keys[index]] for index in range(len(sorted_inputs))]
+ 
+  # If decode_to_file was provided use it as the output filename without change
+  # (except for adding shard_id if using more shards for decoding).
+  # Otherwise, use the input filename plus model, hp, problem, beam, alpha.
+  decode_filename = decode_to_file if decode_to_file else filename
+  if not decode_to_file:
+    decode_filename = _decode_filename(decode_filename, problem_name, decode_hp)
+  else:
+    decode_filename = _add_shard_to_filename(decode_filename, decode_hp)
+  if hasattr(hparams, 'mc_dropout_seed'):
+    decode_filename = decode_filename + ".seed-" + str(hparams.mc_dropout_seed[0]) \
+                      + "_" + str(hparams.mc_dropout_seed[1])
+  decode_filename = decode_filename + ".bs"
+  tf.logging.info("Writing decodes into %s" % decode_filename)
+  outfile = tf.gfile.Open(decode_filename, "w")
+  for index in range(len(sorted_inputs)):
+    outfile.write("%s%s" % (decodes[index], decode_hp.delimiter))
+  outfile.flush()
+  outfile.close()
+
+  output_dir = os.path.join(estimator.model_dir, "decode")
+  tf.gfile.MakeDirs(output_dir)
+
+  run_postdecode_hooks(DecodeHookArgs(
+      estimator=estimator,
+      problem=hparams.problem,
+      output_dirs=[output_dir],
+      hparams=hparams,
+      decode_hparams=decode_hp,
+      predictions=list(result_iter)
+  ), None)
+
+  return decodes, prob_scores, log_probs
+
+
+
 def decode_from_file_with_confidence(estimator,
                                      filename,
                                      hparams,

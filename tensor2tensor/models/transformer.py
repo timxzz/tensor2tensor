@@ -39,7 +39,6 @@ from tensor2tensor.layers import transformer_layers
 from tensor2tensor.layers import transformer_memory
 from tensor2tensor.utils import beam_search
 from tensor2tensor.utils import beam_search_with_prob
-from tensor2tensor.utils import confidence_search
 from tensor2tensor.utils import expert_utils
 from tensor2tensor.utils import mlperf_log
 from tensor2tensor.utils import registry
@@ -61,6 +60,7 @@ transformer_ffn_layer = transformer_layers.transformer_ffn_layer
 
 def transformer_encode(encoder_function, inputs, target_space, hparams,
                        attention_weights=None, features=None, losses=None,
+                       mc_dropout_seed=None,
                        **kwargs):
   """Encode transformer inputs.
 
@@ -94,10 +94,8 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
       value=hparams.layer_prepostprocess_dropout,
       hparams=hparams)
 
-  mc_dropout_seed = None
   dropout_broadcast_dims = None
-  if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
+  if mc_dropout_seed is not None:
     dropout_broadcast_dims = common_layers.comma_separated_string_to_integer_list(
       getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", ""))
 
@@ -120,6 +118,7 @@ def transformer_encode(encoder_function, inputs, target_space, hparams,
       make_image_summary=not common_layers.is_xla_compiled(),
       losses=losses,
       attn_bias_for_padding=attn_bias_for_padding,
+      mc_dropout_seed=mc_dropout_seed,
       **kwargs)
 
   return encoder_output, encoder_decoder_attention_bias
@@ -136,6 +135,7 @@ def transformer_decode(decoder_function,
                        decode_loop_step=None,
                        nonpadding=None,
                        losses=None,
+                       mc_dropout_seed=None,
                        **kwargs):
   """Decode Transformer outputs from encoder representation.
 
@@ -167,10 +167,8 @@ def transformer_decode(decoder_function,
       value=hparams.layer_prepostprocess_dropout,
       hparams=hparams)
 
-  mc_dropout_seed = None
-  dropout_broadcast_dims = None
-  if hasattr(hparams, 'mc_dropout_seed'):
-    mc_dropout_seed = hparams.mc_dropout_seed
+  dropout_broadcast_dims = None  
+  if mc_dropout_seed is not None:
     dropout_broadcast_dims = common_layers.comma_separated_string_to_integer_list(
       getattr(hparams, "layer_prepostprocess_dropout_broadcast_dims", ""))
 
@@ -190,6 +188,7 @@ def transformer_decode(decoder_function,
       nonpadding=nonpadding,
       save_weights_to=attention_weights,
       losses=losses,
+      mc_dropout_seed=mc_dropout_seed,
       **kwargs)
 
   if (common_layers.is_xla_compiled() and
@@ -213,12 +212,12 @@ class Transformer(t2t_model.T2TModel):
     self._encoder_function = transformer_encoder
     self._decoder_function = transformer_decoder
 
-  def encode(self, inputs, target_space, hparams, features=None, losses=None):
+  def encode(self, inputs, target_space, hparams, features=None, losses=None, mc_dropout_seed=None):
     """Encode transformer inputs, see transformer_encode."""
     return transformer_encode(
         self._encoder_function, inputs, target_space, hparams,
         attention_weights=self.attention_weights,
-        features=features, losses=losses)
+        features=features, losses=losses, mc_dropout_seed=mc_dropout_seed)
 
   def decode(self,
              decoder_input,
@@ -230,6 +229,7 @@ class Transformer(t2t_model.T2TModel):
              decode_loop_step=None,
              nonpadding=None,
              losses=None,
+             mc_dropout_seed=None,
              **kwargs):
     """Decode Transformer outputs, see transformer_decode."""
     return transformer_decode(
@@ -237,7 +237,7 @@ class Transformer(t2t_model.T2TModel):
         encoder_decoder_attention_bias, decoder_self_attention_bias,
         hparams, attention_weights=self.attention_weights, cache=cache,
         decode_loop_step=decode_loop_step, nonpadding=nonpadding, losses=losses,
-        **kwargs)
+        mc_dropout_seed=mc_dropout_seed, **kwargs)
 
   def body(self, features):
     """Transformer main model_fn.
@@ -257,11 +257,18 @@ class Transformer(t2t_model.T2TModel):
 
     losses = []
 
+    mc_dropout_seed = None
+    if "mc_dropout_seed" in features:
+      mc_dropout_seed = features["mc_dropout_seed"]
+
+    # mc_dropout_seed = tf.Print(mc_dropout_seed, [mc_dropout_seed])
+
     if self.has_input:
       inputs = features["inputs"]
       target_space = features["target_space_id"]
       encoder_output, encoder_decoder_attention_bias = self.encode(
-          inputs, target_space, hparams, features=features, losses=losses)
+          inputs, target_space, hparams, features=features, losses=losses,
+          mc_dropout_seed=mc_dropout_seed)
     else:
       encoder_output, encoder_decoder_attention_bias = (None, None)
 
@@ -300,6 +307,7 @@ class Transformer(t2t_model.T2TModel):
         hparams,
         nonpadding=features_to_nonpadding(features, "targets"),
         losses=losses,
+        mc_dropout_seed=mc_dropout_seed,
         **decode_kwargs
         )
 
@@ -338,13 +346,14 @@ class Transformer(t2t_model.T2TModel):
       NotImplementedError: If there are multiple data shards.
     """
     # For real-valued modalities use the slow decode path for now.
-    if (self._target_modality_is_real or
-        self._hparams.self_attention_type != "dot_product"):
-      return super(Transformer, self)._greedy_infer(features, decode_length)
-    with tf.variable_scope(self.name):
-      if use_tpu:
-        return self._fast_decode_tpu(features, decode_length, alpha=alpha)
-      return self._fast_decode(features, decode_length, alpha=alpha)
+    # if (self._target_modality_is_real or
+    #     self._hparams.self_attention_type != "dot_product"):
+    #   return super(Transformer, self)._greedy_infer(features, decode_length)
+    # with tf.variable_scope(self.name):
+    #   if use_tpu:
+    #     return self._fast_decode_tpu(features, decode_length, alpha=alpha)
+    #   return self._fast_decode(features, decode_length, alpha=alpha)
+    return super(Transformer, self)._greedy_infer(features, decode_length)
 
   def _beam_decode(self,
                    features,
@@ -373,21 +382,132 @@ class Transformer(t2t_model.T2TModel):
               None if using greedy decoding (beam_size=1)
       }
     """
-    if (self._hparams.self_attention_type not in [
-        "dot_product", "dot_product_relative"
-    ]):
-      # Caching is not guaranteed to work with attention types other than
-      # dot_product.
-      # TODO(petershaw): Support fast decoding when using relative
-      # position representations, i.e. "dot_product_relative" attention.
-      return self._beam_decode_slow(features, decode_length, beam_size,
-                                    top_beams, alpha, use_tpu)
-    with tf.variable_scope(self.name):
-      if use_tpu:
-        return self._fast_decode_tpu(features, decode_length, beam_size,
-                                     top_beams, alpha)
-      return self._fast_decode(features, decode_length, beam_size, top_beams,
-                               alpha)
+    # if (self._hparams.self_attention_type not in [
+    #     "dot_product", "dot_product_relative"
+    # ]):
+    #   # Caching is not guaranteed to work with attention types other than
+    #   # dot_product.
+    #   # TODO(petershaw): Support fast decoding when using relative
+    #   # position representations, i.e. "dot_product_relative" attention.
+    #   return self._beam_decode_slow(features, decode_length, beam_size,
+    #                                 top_beams, alpha, use_tpu)
+    # with tf.variable_scope(self.name):
+    #   if use_tpu:
+    #     return self._fast_decode_tpu(features, decode_length, beam_size,
+    #                                  top_beams, alpha)
+    #   return self._fast_decode(features, decode_length, beam_size, top_beams,
+    #                            alpha)
+    tf.logging.info("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    return self._beam_mc_decode_slow(features, decode_length, beam_size, top_beams,
+                                  alpha, use_tpu)
+
+  def _beam_mc_decode_slow(self, features, decode_length, beam_size, top_beams,
+                        alpha, use_tpu=False):
+    """Slow version of Beam search decoding.
+
+    Quadratic time in decode_length.
+
+    Args:
+      features: an map of string to `Tensor`
+      decode_length: an integer.  How many additional timesteps to decode.
+      beam_size: number of beams.
+      top_beams: an integer. How many of the beams to return.
+      alpha: Float that controls the length penalty. larger the alpha, stronger
+        the preference for longer translations.
+      use_tpu: A bool, whether to do slow beam decode on TPU.
+
+    Returns:
+      samples: an integer `Tensor`. Top samples from the beam search.
+
+    Raises:
+      NotImplementedError: If use_tpu is set to true.
+    """
+    batch_size = common_layers.shape_list(features["inputs"])[0]
+
+    def symbols_to_logits_fn(ids, i=None):
+      """Go from ids to logits."""
+      ids = tf.expand_dims(tf.expand_dims(ids, axis=2), axis=3)
+      ids = tf.pad(ids[:, 1:], [[0, 0], [0, 1], [0, 0], [0, 0]])
+      if "partial_targets" in features:
+        pt = features["partial_targets"]
+        pt_length = common_layers.shape_list(pt)[1]
+        pt = tf.tile(pt, [1, beam_size])
+        pt = tf.reshape(pt, [batch_size * beam_size, pt_length, 1, 1])
+        ids = tf.concat([pt, ids], axis=1)
+
+      features["targets"] = ids
+      if i is not None:
+        features["decode_loop_step"] = i
+      self._coverage = None
+      logits, _ = self(features)  # pylint: disable=not-callable
+      # now self._coverage is a coverage tensor for the first datashard.
+      # it has shape [batch_size] and contains floats between 0 and
+      # source_length.
+      if self._problem_hparams:
+        modality = self._problem_hparams.modality["targets"]
+        top = self._hparams.top.get("targets", modalities.get_top(modality))
+        if getattr(top, "pointwise", False):
+          return tf.squeeze(logits, axis=[1, 2, 3])
+      # -1 due to the pad above.
+      current_output_position = common_layers.shape_list(ids)[1] - 1
+      logits = logits[:, current_output_position, :, :]
+      return tf.squeeze(logits, axis=[1, 2])
+
+    def _clone_examples_for_beam(old_feature, n):
+      """Clone each example n times."""
+      old_shape = common_layers.shape_list(old_feature)
+      assert len(old_shape) >= 1
+
+      # Expand the inputs in to the beam size.
+      feature = tf.expand_dims(old_feature, 1)
+      feature = tf.tile(feature, [1, n] + [1] * (len(old_shape) - 1))
+      new_shape = common_layers.shape_list(feature)
+      feature = tf.reshape(feature,
+                           [new_shape[0] * new_shape[1]] + new_shape[2:])
+      return feature
+
+    initial_ids = tf.zeros([batch_size], dtype=tf.int32)
+
+    # Clone select features multiple times to account for beam size.
+    old_features = {}
+    for feature_name in ["inputs", "knowledge"]:
+      if feature_name not in features:
+        continue
+      old_features[feature_name] = features[feature_name]
+      features[feature_name] = _clone_examples_for_beam(
+          features[feature_name], beam_size)
+
+    vocab_size = self._problem_hparams.vocab_size["targets"]
+    if vocab_size is not None and hasattr(self._hparams, "vocab_divisor"):
+      vocab_size += (-vocab_size) % self._hparams.vocab_divisor
+
+    # Setting decode length to input length + decode_length
+    if "partial_targets" not in features:
+      inputs = features["inputs"]
+      decode_length = (common_layers.shape_list(inputs)[1] +
+                       features.get("decode_length", decode_length))
+    ids, scores, _ = beam_search.beam_search(
+        symbols_to_logits_fn,
+        initial_ids,
+        beam_size,
+        decode_length,
+        vocab_size,
+        alpha,
+        stop_early=(top_beams == 1),
+        use_tpu=use_tpu)
+
+    # Set features back to the unexpanded form to not to confuse the
+    # Estimator!
+    features.update(old_features)
+
+    # Return `top_beams` decodings (also remove initial id from the beam search)
+    # TODO(lukaszkaiser): make it work multi-problem.
+    if top_beams == 1:
+      samples = ids[:, 0, 1:]
+    else:
+      samples = ids[:, :top_beams, 1:]
+
+    return {"outputs": samples, "scores": scores}
 
   def _fast_decode_tpu(self,
                        features,
@@ -1583,6 +1703,7 @@ def transformer_decoder(decoder_input,
                         layer_collection=None,
                         recurrent_memory_by_layer=None,
                         chunk_number=None,
+                        mc_dropout_seed=None
                         ):
   """A stack of transformer layers.
 
@@ -1653,7 +1774,7 @@ def transformer_decoder(decoder_input,
         with tf.variable_scope("self_attention"):
           y = common_attention.multihead_attention(
               common_layers.layer_preprocess(
-                  x, hparams, layer_collection=layer_collection),
+                  x, hparams, layer_collection=layer_collection, mc_dropout_seed=mc_dropout_seed),
               None,
               decoder_self_attention_bias,
               hparams.attention_key_channels or hparams.hidden_size,
@@ -1680,12 +1801,12 @@ def transformer_decoder(decoder_input,
               chunk_number=chunk_number,
               hard_attention_k=hparams.get("hard_attention_k", 0)
               )
-          x = common_layers.layer_postprocess(x, y, hparams)
+          x = common_layers.layer_postprocess(x, y, hparams, mc_dropout_seed=mc_dropout_seed)
         if encoder_output is not None:
           with tf.variable_scope("encdec_attention"):
             y = common_attention.multihead_attention(
                 common_layers.layer_preprocess(
-                    x, hparams, layer_collection=layer_collection),
+                    x, hparams, layer_collection=layer_collection, mc_dropout_seed=mc_dropout_seed),
                 encoder_output,
                 encoder_decoder_attention_bias,
                 hparams.attention_key_channels or hparams.hidden_size,
@@ -1707,19 +1828,20 @@ def transformer_decoder(decoder_input,
                 weight_dtype=hparams.get("weight_dtype", "float32"),
                 layer_collection=layer_collection,
                 hard_attention_k=hparams.get("hard_attention_k", 0))
-            x = common_layers.layer_postprocess(x, y, hparams)
+            x = common_layers.layer_postprocess(x, y, hparams, mc_dropout_seed=mc_dropout_seed)
         with tf.variable_scope("ffn"):
           y = transformer_ffn_layer(
               common_layers.layer_preprocess(
-                  x, hparams, layer_collection=layer_collection),
+                  x, hparams, layer_collection=layer_collection, mc_dropout_seed=mc_dropout_seed),
               hparams,
               conv_padding="LEFT",
               nonpadding_mask=nonpadding,
               losses=losses,
               cache=layer_cache,
               decode_loop_step=decode_loop_step,
-              layer_collection=layer_collection)
-          x = common_layers.layer_postprocess(x, y, hparams)
+              layer_collection=layer_collection,
+              mc_dropout_seed=mc_dropout_seed)
+          x = common_layers.layer_postprocess(x, y, hparams, mc_dropout_seed=mc_dropout_seed)
     # if normalization is done in layer_preprocess, then it should also be done
     # on the output, since the output can grow very large, being the sum of
     # a whole stack of unnormalized layer outputs.
@@ -1727,7 +1849,7 @@ def transformer_decoder(decoder_input,
         key=mlperf_log.MODEL_HP_NORM,
         value={"hidden_size": hparams.hidden_size})
     return common_layers.layer_preprocess(
-        x, hparams, layer_collection=layer_collection)
+        x, hparams, layer_collection=layer_collection, mc_dropout_seed=mc_dropout_seed)
 
 
 @registry.register_model

@@ -1161,7 +1161,10 @@ class T2TModel(base.Layer):
         "scores": None,
         "logits": logits,
         "losses": losses,
+        "log_probs": None,
     }
+
+
 
   def _slow_greedy_infer(self, features, decode_length):
     """A slow greedy inference method.
@@ -1217,7 +1220,7 @@ class T2TModel(base.Layer):
       features["targets"] = padded
       # This is inefficient in that it generates samples at all timesteps,
       # not just the last one, except if target_modality is pointwise.
-      samples, logits, losses = self.sample(features)
+      samples, logits, loss = self.sample(features, batch_size, vocab_size)
       # Concatenate the already-generated recent_output with last timestep
       # of the newly-generated samples.
       top = self._hparams.top.get("targets",
@@ -1238,7 +1241,7 @@ class T2TModel(base.Layer):
 
       # Assuming we have one shard for logits.
       logits = tf.concat([recent_logits, logits[:, -1:]], 1)
-      loss = sum([l for l in losses.values() if l is not None])
+      
       return samples, logits, loss
 
     # Create an initial output tensor. This will be passed
@@ -1344,7 +1347,7 @@ class T2TModel(base.Layer):
         "losses": losses,
     }
 
-  def sample(self, features):
+  def sample(self, features, batch_size, vocab_size):
     """Run the model and extract samples.
 
     Args:
@@ -1355,9 +1358,43 @@ class T2TModel(base.Layer):
        logits: a list of `Tensor`s, one per datashard.
        losses: a dictionary: {loss-name (string): floating point `Scalar`}.
     """
-    logits, losses = self(features)  # pylint: disable=not-callable
+    mc_nums = len(self.hparams.mc_dropout_seeds)
+    # logits = tf.Print(logits, [tf.shape(logits)], summarize=100)
+
+    # tensor of shape [batch_size, time, 1, 1, vocab_size]
+    sum_logits = tf.zeros((batch_size, 1, 1, 1, vocab_size))
+    sum_logits_shape_inv = [None, None, None, None, None]
+    if not tf.executing_eagerly():
+      sum_logits.set_shape(sum_logits_shape_inv)
+    sum_losses = 0.0
+
+    def sampling_token(i, sum_logits, sum_losses):
+      features["mc_dropout_seed"] = tf.gather(self.hparams.mc_dropout_seeds, i)
+      logit, losses = self(features)  # pylint: disable=not-callable
+      # i = tf.Print(i, [i,features["mc_dropout_seed"],logit], summarize=100)
+      los = sum([l for l in losses.values() if l is not None])
+      sum_logits += logit
+      sum_losses += los
+
+      return i + 1, sum_logits, sum_losses
+
+    def while_exit_cond(i, sum_logits, sum_losses):
+      return i < mc_nums
+
+    _, logits, loss = tf.while_loop(
+        while_exit_cond,
+        sampling_token, [tf.constant(0), sum_logits, sum_losses],
+        shape_invariants=[
+            tf.TensorShape([]),
+            tf.TensorShape(sum_logits_shape_inv),
+            tf.TensorShape([]),
+        ])
+
+    logits = logits / mc_nums
+    loss = loss / mc_nums
+
     if self._target_modality_is_real:
-      return logits, logits, losses  # Raw numbers returned from real modality.
+      return logits, logits, loss  # Raw numbers returned from real modality.
     if self.hparams.sampling_method == "argmax":
       samples = tf.argmax(logits, axis=-1)
     else:
@@ -1373,7 +1410,8 @@ class T2TModel(base.Layer):
 
       samples = multinomial_squeeze(logits, self.hparams.sampling_temp)
 
-    return samples, logits, losses
+    tf.logging.info(samples)
+    return samples, logits, loss
 
   def _shard_features(self, features):  # pylint: disable=missing-docstring
     sharded_features = {}
@@ -1715,9 +1753,9 @@ class T2TModel(base.Layer):
     if isinstance(infer_out, dict):
       outputs = infer_out["outputs"]
       scores = infer_out["scores"]
-      log_probs = infer_out["log_probs"]
+      log_probs = None #infer_out["log_probs"]
       # tpu_debug = infer_out["tpu_debug"]
-      token_log_probs = infer_out["token_log_probs"]
+      token_log_probs = None #infer_out["token_log_probs"]
     else:
       outputs = infer_out
       scores = None
@@ -1742,7 +1780,7 @@ class T2TModel(base.Layer):
     # Pass through remaining features
     for name, feature in features.items():
       if name not in list(predictions.keys()) + ["infer_targets"]:
-        if name == "decode_loop_step":
+        if name == "decode_loop_step" or name == "mc_dropout_seed":
           continue
         if not feature.shape.as_list():
           # All features must have a batch dimension
