@@ -264,7 +264,7 @@ def main(_):
     for one_batch in MC_batchs:
       bleu_MC_batch = []
       mean_bleu_sums = [0] * num_MC_samples
-      for i,j in itertools.combinations(list(range(num_MC_samples)),2):
+      for i,j in itertools.permutations(list(range(num_MC_samples)),2):
         # 1-BLEU as the larger the BLEU the closer two sentence are
         b = 100 * (1 - bleu_hook.bleu_one_pair(one_batch[i],one_batch[j]))
         bleu_MC_batch.append(b)
