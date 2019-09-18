@@ -311,7 +311,7 @@ def bleu_one_pair(a, b, case_sensitive=False):
     b = b.lower()
   a_tokens = bleu_tokenize(a)
   b_tokens = bleu_tokenize(b)
-  return compute_bleu(a_tokens, b_tokens)
+  return compute_bleu([a_tokens], [b_tokens])
 
 
 StepFile = collections.namedtuple("StepFile", "filename mtime ctime steps")

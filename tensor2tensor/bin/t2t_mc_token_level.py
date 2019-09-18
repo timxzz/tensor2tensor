@@ -103,6 +103,28 @@ def decode(estimator, hparams, decode_hp):
     os.utime(FLAGS.decode_to_file, (ckpt_time, ckpt_time))
   return result
 
+def accumulated_bleu(reference, decodes, sorted_key, uncertainty, name):
+  tf.logging.info("Calculating the accumulated BLEU scores ordered by " + name) 
+  ref_lines = [reference[sorted_key[index]] for index in range(len(sorted_key))]
+  hyp_lines = [decodes[sorted_key[index]] for index in range(len(sorted_key))]
+  #if not case_sensitive:
+  ref_lines = [x.lower() for x in ref_lines]
+  hyp_lines = [x.lower() for x in hyp_lines]
+  ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
+  hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines] 
+  hyp_lengths = [len(x) for x in hyp_tokens]
+  accumulated_bleus = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
+
+  individual_bleus = []
+  for (ref, hyp) in zip(ref_tokens, hyp_tokens):
+    individual_bleu = 100 * bleu_hook.compute_bleu([ref], [hyp])
+    individual_bleus.append(individual_bleu)
+
+  csv_filename = FLAGS.decode_to_file + "." + name + ".csv"
+  tf.logging.info("Writing " + name + " into %s" % csv_filename)
+  np.savetxt(csv_filename, np.column_stack((uncertainty, accumulated_bleus, individual_bleus, hyp_lengths)),
+              delimiter=",", fmt='%s')
+
 
 def score_file(filename):
   """Score each line in a file and return the scores."""
@@ -192,8 +214,8 @@ def main(_):
 
   mc_dropout_seeds = None
   if FLAGS.mc_sampling:
-    # mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
-    mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
+    mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
+    # mc_dropout_seeds = np.array([[853751, 85362], [529532, 454878], [446227, 437121], [875822, 31542], [476300, 999464], [161050, 549147], [27724, 731808], [98251, 977235], [847405, 584430], [430167, 582189]])
   # mc_dropout_seeds = np.array([[853751, 85362], [853751, 85362]])
 
   hp = create_hparams(mc_dropout_seeds=mc_dropout_seeds)
@@ -206,14 +228,7 @@ def main(_):
       decode_hparams=decode_hp,
       use_tpu=FLAGS.use_tpu)
 
-  result, prob_scores, _ = decode(estimator, hp, decode_hp)
-  # if not (FLAGS.mc_sampling or decode_hp.uncertainty_over_prob):
-  return
-
-
-
-  results.append(result)
-  probs = prob_scores
+  results, prob_scores, log_probs = decode(estimator, hp, decode_hp)
 
   if FLAGS.mc_sampling:
     tf.logging.info("Finshed MC sampling, MC dropout random seeds:")
@@ -221,95 +236,23 @@ def main(_):
     
   decodes = np.array(results).flatten('F')
   # ======================= Uncertainty ===========================
-  uncertainties = 0
-  mean_samples = []
-  sorted_uncertainties_key = []
-  if decode_hp.uncertainty_over_prob:
-    tf.logging.info("Calculating variance through prob of top beam.")
-    uncertainties = probs
-    sorted_uncertainties_key = sorted(range(len(uncertainties)), key=lambda k: uncertainties[k], reverse=True)
-    mean_samples = decodes
-  else:
-    # Calculating variance of MC samples
-    tf.logging.info("Calculating the mutual BLEU score "
-                    "among the MC samples for each input.")
-    bleu_MC_batchs = []
-    MC_batchs = np.reshape(decodes, (-1, num_MC_samples))
-    for one_batch in MC_batchs:
-      bleu_MC_batch = []
-      mean_bleu_sums = [0] * num_MC_samples
-      for i,j in itertools.combinations(list(range(num_MC_samples)),2):
-        # 1-BLEU as the larger the BLEU the closer two sentence are
-        b = 100 * (1 - bleu_hook.bleu_one_pair(one_batch[i],one_batch[j]))
-        bleu_MC_batch.append(b)
-        # Adding the distance, the min corresponds to mean
-        mean_bleu_sums[i] += b
-        mean_bleu_sums[j] += b
-      index_mean = min(range(len(mean_bleu_sums)), key=mean_bleu_sums.__getitem__)
-      mean_samples.append(one_batch[index_mean])
-      bleu_MC_batchs.append(bleu_MC_batch)
+  tf.logging.info("Ordering the mc token result by Greedy seq prob scores and Greedy seq prob.")
+  sorted_sp_scores_key = sorted(range(len(prob_scores)), key=lambda k: prob_scores[k], reverse=True)
+  sorted_log_sp_key = sorted(range(len(log_probs)), key=lambda k: log_probs[k], reverse=True) 
 
-    bleu_square = np.array(bleu_MC_batchs) ** 2
-    uncertainties = np.sum(bleu_square, axis=1) / (num_MC_samples ** 2)
-    sorted_uncertainties_key = sorted(range(len(uncertainties)), key=lambda k: uncertainties[k])
+  # Reorder according to the sorted scores and log probs
+  sp_scores = [prob_scores[sorted_sp_scores_key[index]] for index in range(len(sorted_sp_scores_key))]
+  log_sp = [log_probs[sorted_log_sp_key[index]] for index in range(len(sorted_log_sp_key))]
 
-  # Reorder according to sorted uncertainties
-  uncertainties = [uncertainties[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
-  # Calculating BLEU of each MC mean samples
-  tf.logging.info("Calculating the accumulated BLEU scores for each MC mean samples towards "
-                  "target output.") 
-  ref_lines = text_encoder.native_to_unicode(
-      tf.gfile.Open(FLAGS.reference, "r").read()).split("\n")
-  ref_lines = [ref_lines[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
-  hyp_lines = [mean_samples[sorted_uncertainties_key[index]] for index in range(len(sorted_uncertainties_key))]
-  #if not case_sensitive:
-  ref_lines = [x.lower() for x in ref_lines]
-  hyp_lines = [x.lower() for x in hyp_lines]
-  ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
-  hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines]
+
 
   # ------------ For accumulated BLEU ------------------
-  hyp_lengths = [len(x) for x in hyp_tokens]
+  # Calculating the accumulated BLEU scores
+  reference = text_encoder.native_to_unicode(
+      tf.gfile.Open(FLAGS.reference, "r").read()).split("\n")
 
-  # num_of_len_subset = 10
-  # sorted_hyp_lengths = sorted(hyp_lengths)
-  # splited_hyp_lengths = np.array_split(sorted_hyp_lengths, num_of_len_subset)
-
-  # for i in range(num_of_len_subset):
-  #   ref_tokens_sub = []
-  #   hyp_tokens_sub = []
-  #   hyp_lengths_sub = []
-  #   uncertainties_sub = []
-  #   for (ref_token, hyp_token, hyp_length, variance) in zip(ref_tokens, hyp_tokens, hyp_lengths, uncertainties):
-  #     if hyp_length in splited_hyp_lengths[i]:
-  #       ref_tokens_sub.append(ref_token)
-  #       hyp_tokens_sub.append(hyp_token)
-  #       hyp_lengths_sub.append(hyp_length)
-  #       uncertainties_sub.append(variance)
-  #   accumulated_bleus_sub = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens_sub, hyp_tokens_sub)
-  #   csv_filename = decode_to_file + ".uncertainties_sub" + str(i) + ".csv"
-  #   tf.logging.info("Writing uncertainties into %s" % csv_filename)
-  #   np.savetxt(csv_filename, np.column_stack((uncertainties_sub, accumulated_bleus_sub, hyp_lengths_sub)), 
-  #               delimiter=",", fmt='%s')
-
-  accumulated_bleus = 100 * bleu_hook.compute_accumulated_bleu(ref_tokens, hyp_tokens)
-
-  tf.logging.info("Calculating the individual BLEU scores for each MC mean samples towards "
-                  "target output.") 
-  individual_bleus = []
-  for (ref, hyp) in zip(ref_tokens, hyp_tokens):
-    individual_bleu = 100 * bleu_hook.compute_bleu(ref, hyp)
-    individual_bleus.append(individual_bleu)
-
-  csv_filename = ""
-  if decode_hp.uncertainty_over_prob:
-    csv_filename = FLAGS.decode_to_file + ".prob_full.csv"
-    tf.logging.info("Writing sequence prob into %s" % csv_filename)
-  else:
-    csv_filename = FLAGS.decode_to_file + ".variance_full.csv"
-    tf.logging.info("Writing variance into %s" % csv_filename)
-  np.savetxt(csv_filename, np.column_stack((uncertainties, accumulated_bleus, individual_bleus, hyp_lengths)),
-              delimiter=",", fmt='%s')
+  accumulated_bleu(reference, decodes, sorted_sp_scores_key, sp_scores, "sp_scores")
+  accumulated_bleu(reference, decodes, sorted_log_sp_key, log_sp, "log_sp")
 
   # ----------------------------------------------------
 

@@ -682,50 +682,23 @@ def decode_from_file_mc_token(estimator,
         break
 
   for elapsed_time, result in timer(result_iter):
-    if decode_hp.return_beams:
-      beam_decodes = []
-      beam_scores = []
-      output_beams = np.split(result["outputs"], decode_hp.beam_size, axis=0)
-      scores = None
-      if "scores" in result:
-        if np.isscalar(result["scores"]):
-          result["scores"] = result["scores"].reshape(1)
-        scores = np.split(result["scores"], decode_hp.beam_size, axis=0)
-      for k, beam in enumerate(output_beams):
-        tf.logging.info("BEAM %d:" % k)
-        score = scores and scores[k]
-        _, decoded_outputs, _ = log_decode_results(
-            result["inputs"],
-            beam,
-            problem_name,
-            None,
-            inputs_vocab,
-            targets_vocab,
-            log_results=decode_hp.log_results,
-            skip_eos_postprocess=decode_hp.skip_eos_postprocess)
-        beam_decodes.append(decoded_outputs)
-        if decode_hp.write_beam_scores:
-          beam_scores.append(score)
-      if decode_hp.write_beam_scores:
-        decodes.append("\t".join([
-            "\t".join([d, "%.2f" % s])
-            for d, s in zip(beam_decodes, beam_scores)
-        ]))
-      else:
-        decodes.append("\t".join(beam_decodes))
-    else:
-      # tf.logging.info(result["log_probs"])
-      # tf.logging.info(result["tpu_debug"])
-      _, decoded_outputs, _ = log_decode_results(
-          result["inputs"],
-          result["outputs"],
-          problem_name,
-          None,
-          inputs_vocab,
-          targets_vocab,
-          log_results=decode_hp.log_results,
-          skip_eos_postprocess=decode_hp.skip_eos_postprocess)
-      decodes.append(decoded_outputs)
+    if np.isscalar(result["scores"]):
+      result["scores"] = result["scores"].reshape(1)
+    if np.isscalar(result["log_probs"]):
+      result["log_probs"] = result["log_probs"].reshape(1)
+    prob_scores.append(result["scores"])
+    log_probs.append(result["log_probs"])
+
+    _, decoded_outputs, _ = log_decode_results(
+        result["inputs"],
+        result["outputs"],
+        problem_name,
+        None,
+        inputs_vocab,
+        targets_vocab,
+        log_results=decode_hp.log_results,
+        skip_eos_postprocess=decode_hp.skip_eos_postprocess)
+    decodes.append(decoded_outputs)
     total_time_per_step += elapsed_time
     total_cnt += result["outputs"].shape[-1]
 
@@ -746,9 +719,8 @@ def decode_from_file_mc_token(estimator,
 
   # Reorder
   decodes = [decodes[sorted_keys[index]] for index in range(len(sorted_inputs))]
-  if decode_hp.uncertainty_over_prob:
-    prob_scores = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
-    log_probs = [log_probs[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  prob_scores = [prob_scores[sorted_keys[index]] for index in range(len(sorted_inputs))]
+  log_probs = [log_probs[sorted_keys[index]] for index in range(len(sorted_inputs))]
  
   # If decode_to_file was provided use it as the output filename without change
   # (except for adding shard_id if using more shards for decoding).
@@ -758,10 +730,11 @@ def decode_from_file_mc_token(estimator,
     decode_filename = _decode_filename(decode_filename, problem_name, decode_hp)
   else:
     decode_filename = _add_shard_to_filename(decode_filename, decode_hp)
-  if hasattr(hparams, 'mc_dropout_seed'):
-    decode_filename = decode_filename + ".seed-" + str(hparams.mc_dropout_seed[0]) \
-                      + "_" + str(hparams.mc_dropout_seed[1])
-  decode_filename = decode_filename + ".bs"
+
+  if hasattr(hparams, 'mc_dropout_seeds'):
+    decode_filename = decode_filename + ".greedy-mc-token"
+  else:
+    decode_filename = decode_filename + ".greedy"
   tf.logging.info("Writing decodes into %s" % decode_filename)
   outfile = tf.gfile.Open(decode_filename, "w")
   for index in range(len(sorted_inputs)):

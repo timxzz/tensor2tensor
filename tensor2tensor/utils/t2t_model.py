@@ -1206,7 +1206,7 @@ class T2TModel(base.Layer):
 
     target_modality = self._problem_hparams.modality["targets"]
 
-    def infer_step(recent_output, recent_logits, unused_loss):
+    def infer_step(i, recent_output, hit_eos, recent_logits, unused_loss, log_seq_prob, curr_scores):
       """Inference step."""
       if not tf.executing_eagerly():
         if self._target_modality_is_real:
@@ -1220,12 +1220,13 @@ class T2TModel(base.Layer):
       features["targets"] = padded
       # This is inefficient in that it generates samples at all timesteps,
       # not just the last one, except if target_modality is pointwise.
-      samples, logits, loss = self.sample(features, batch_size, vocab_size)
+      samples, logits, loss, log_avg_probs = self.sample(features, batch_size, vocab_size)
       # Concatenate the already-generated recent_output with last timestep
       # of the newly-generated samples.
       top = self._hparams.top.get("targets",
                                   modalities.get_top(target_modality))
       if getattr(top, "pointwise", False):
+        # <------------------ Go to here
         cur_sample = samples[:, -1, :, :]
       else:
         cur_sample = samples[:,
@@ -1234,15 +1235,32 @@ class T2TModel(base.Layer):
         cur_sample = tf.expand_dims(cur_sample, axis=1)
         samples = tf.concat([recent_output, cur_sample], axis=1)
       else:
+        # <------------------ Go to here
         cur_sample = tf.to_int64(tf.expand_dims(cur_sample, axis=1))
         samples = tf.concat([recent_output, cur_sample], axis=1)
         if not tf.executing_eagerly():
           samples.set_shape([None, None, None, 1])
-
       # Assuming we have one shard for logits.
       logits = tf.concat([recent_logits, logits[:, -1:]], 1)
-      
-      return samples, logits, loss
+
+      # Calculate the current sequence prob score
+      flat_cur_sample = tf.reshape(cur_sample, [-1])
+      flat_log_avg_probs = tf.reshape(log_avg_probs, [-1])
+
+      next_id_log_prob_mask = tf.cast(tf.logical_not(hit_eos), tf.float32)
+      last_hit_eos_mask = tf.cast(hit_eos, tf.float32)
+      hit_eos |= tf.equal(flat_cur_sample, text_encoder.EOS_ID)
+
+      masked_next_id_log_prob = tf.multiply(flat_log_avg_probs, next_id_log_prob_mask)
+      log_seq_prob += masked_next_id_log_prob
+
+      length_penalty = tf.pow(((5. + tf.to_float(i + 1)) / 6.), 0.6) # ! -------> set alpha=0.6 by parameter
+      tmp_scores = log_seq_prob / length_penalty
+      last_scores = tf.multiply(curr_scores, last_hit_eos_mask)
+      not_hit_scores = tf.multiply(tmp_scores, next_id_log_prob_mask)
+      curr_scores = last_scores + not_hit_scores
+
+      return i + 1, samples, hit_eos, logits, loss, log_seq_prob, curr_scores
 
     # Create an initial output tensor. This will be passed
     # to the infer_step, which adds one timestep at every iteration.
@@ -1289,9 +1307,13 @@ class T2TModel(base.Layer):
     if not tf.executing_eagerly():
       logits.set_shape(logits_shape_inv)
 
+    hit_eos = tf.fill([batch_size], False)
+    initial_log_prob = tf.zeros([batch_size], dtype=tf.float32)
+    curr_scores = tf.zeros([batch_size], dtype=tf.float32)
+
     loss = 0.0
 
-    def while_exit_cond(result, logits, loss):  # pylint: disable=unused-argument
+    def while_exit_cond(i, result, hit_eos, logits, loss, log_seq_prob, curr_scores):  # pylint: disable=unused-argument
       """Exit the loop either if reach decode_length or EOS."""
       length = common_layers.shape_list(result)[1]
 
@@ -1319,13 +1341,18 @@ class T2TModel(base.Layer):
             lambda: not_overflow)
       return not_overflow
 
-    result, logits, loss = tf.while_loop(
+    _, result, _, logits, loss, log_seq_prob, curr_scores = tf.while_loop(
         while_exit_cond,
-        infer_step, [result, logits, loss],
+        infer_step, [tf.constant(0), result, hit_eos, logits, loss,
+                     initial_log_prob, curr_scores],
         shape_invariants=[
+            tf.TensorShape([]),
             tf.TensorShape([None, None, None, None]),
+            tf.TensorShape([None]),
             tf.TensorShape(logits_shape_inv),
             tf.TensorShape([]),
+            tf.TensorShape([None]),
+            tf.TensorShape([None]),
         ],
         back_prop=False,
         parallel_iterations=1)
@@ -1342,7 +1369,8 @@ class T2TModel(base.Layer):
                         [-1, -1, -1, -1])
     return {
         "outputs": result,
-        "scores": None,
+        "scores": curr_scores,
+        "log_probs": log_seq_prob,
         "logits": logits,
         "losses": losses,
     }
@@ -1358,60 +1386,65 @@ class T2TModel(base.Layer):
        logits: a list of `Tensor`s, one per datashard.
        losses: a dictionary: {loss-name (string): floating point `Scalar`}.
     """
-    mc_nums = len(self.hparams.mc_dropout_seeds)
+    if hasattr(self.hparams, 'mc_dropout_seeds'):
+      mc_nums = len(self.hparams.mc_dropout_seeds)
+    else:
+      mc_nums = 1
     # logits = tf.Print(logits, [tf.shape(logits)], summarize=100)
 
     # tensor of shape [batch_size, time, 1, 1, vocab_size]
     sum_logits = tf.zeros((batch_size, 1, 1, 1, vocab_size))
+    log_probs = tf.zeros((mc_nums, batch_size, 1, 1, 1, vocab_size))
     sum_logits_shape_inv = [None, None, None, None, None]
+    log_probs_shape_inv = [None, None, None, None, None, None]
     if not tf.executing_eagerly():
       sum_logits.set_shape(sum_logits_shape_inv)
+      log_probs.set_shape(log_probs_shape_inv)
     sum_losses = 0.0
 
-    def sampling_token(i, sum_logits, sum_losses):
-      features["mc_dropout_seed"] = tf.gather(self.hparams.mc_dropout_seeds, i)
+    def sampling_token(i, sum_logits, sum_losses, log_probs):
+      if hasattr(self.hparams, 'mc_dropout_seeds'):
+        features["mc_dropout_seed"] = tf.gather(self.hparams.mc_dropout_seeds, i)
       logit, losses = self(features)  # pylint: disable=not-callable
       # i = tf.Print(i, [i,features["mc_dropout_seed"],logit], summarize=100)
+      log_prob = common_layers.log_prob_from_logits(logit)
+
+      # update the corresponding tensor
+      index = tf.convert_to_tensor([[i]], dtype=tf.int32)
+      update = tf.expand_dims(log_prob, axis=0)
+      shape = tf.convert_to_tensor([mc_nums, batch_size, 1, 1, 1, vocab_size], dtype=tf.int32)
+      update_mask = tf.scatter_nd(index, update, shape)
+      log_probs += update_mask
+
       los = sum([l for l in losses.values() if l is not None])
       sum_logits += logit
       sum_losses += los
 
-      return i + 1, sum_logits, sum_losses
+      return i + 1, sum_logits, sum_losses, log_probs
 
-    def while_exit_cond(i, sum_logits, sum_losses):
+    def while_exit_cond(i, sum_logits, sum_losses, log_probs):
       return i < mc_nums
 
-    _, logits, loss = tf.while_loop(
+    _, logits, loss, log_probs = tf.while_loop(
         while_exit_cond,
-        sampling_token, [tf.constant(0), sum_logits, sum_losses],
+        sampling_token, [tf.constant(0), sum_logits, sum_losses, log_probs],
         shape_invariants=[
             tf.TensorShape([]),
             tf.TensorShape(sum_logits_shape_inv),
             tf.TensorShape([]),
+            tf.TensorShape(log_probs_shape_inv),
         ])
 
+    log_sum_probs = tf.reduce_logsumexp(log_probs, axis=0)
+    log_avg_probs = log_sum_probs - math.log(mc_nums)
     logits = logits / mc_nums
     loss = loss / mc_nums
 
-    if self._target_modality_is_real:
-      return logits, logits, loss  # Raw numbers returned from real modality.
-    if self.hparams.sampling_method == "argmax":
-      samples = tf.argmax(logits, axis=-1)
-    else:
-      assert self.hparams.sampling_method == "random"
-
-      def multinomial_squeeze(logits, temperature=1.0):
-        logits_shape = common_layers.shape_list(logits)
-        reshaped_logits = (
-            tf.reshape(logits, [-1, logits_shape[-1]]) / temperature)
-        choices = tf.multinomial(reshaped_logits, 1)
-        choices = tf.reshape(choices, logits_shape[:-1])
-        return choices
-
-      samples = multinomial_squeeze(logits, self.hparams.sampling_temp)
-
-    tf.logging.info(samples)
-    return samples, logits, loss
+    samples = tf.argmax(log_avg_probs, axis=-1)
+    log_avg_prob = tf.reduce_max(log_avg_probs, axis=-1)
+    
+    # samples = tf.Print(samples, [samples, tf.shape(samples)], summarize=100)
+    return samples, logits, loss, log_avg_prob
 
   def _shard_features(self, features):  # pylint: disable=missing-docstring
     sharded_features = {}
@@ -1753,7 +1786,7 @@ class T2TModel(base.Layer):
     if isinstance(infer_out, dict):
       outputs = infer_out["outputs"]
       scores = infer_out["scores"]
-      log_probs = None #infer_out["log_probs"]
+      log_probs = infer_out["log_probs"]
       # tpu_debug = infer_out["tpu_debug"]
       token_log_probs = None #infer_out["token_log_probs"]
     else:
