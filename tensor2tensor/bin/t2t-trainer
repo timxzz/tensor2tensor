@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Trainer for Tensor2Tensor.
 
 This script is used to train your models in Tensor2Tensor.

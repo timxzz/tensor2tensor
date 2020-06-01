@@ -116,13 +116,13 @@ def decode(estimator, hparams, decode_hp, seq_prob_result=None):
   return result
 
 
-def accumulated_bleu(reference, decodes, sorted_key, uncertainty, name):
+def accumulated_bleu(reference, decodes, sorted_key, uncertainty, name, n=0):
   tf.logging.info("Calculating the accumulated BLEU scores ordered by " + name) 
-  ref_lines = [reference[sorted_key[index]] for index in range(len(sorted_key))]
-  hyp_lines = [decodes[sorted_key[index]] for index in range(len(sorted_key))]
+  sorted_ref = [reference[sorted_key[index]] for index in range(len(sorted_key))]
+  sorted_hyp = [decodes[sorted_key[index]] for index in range(len(sorted_key))]
   #if not case_sensitive:
-  ref_lines = [x.lower() for x in ref_lines]
-  hyp_lines = [x.lower() for x in hyp_lines]
+  ref_lines = [x.lower() for x in sorted_ref]
+  hyp_lines = [x.lower() for x in sorted_hyp]
   ref_tokens = [bleu_hook.bleu_tokenize(x) for x in ref_lines]
   hyp_tokens = [bleu_hook.bleu_tokenize(x) for x in hyp_lines] 
   hyp_lengths = [len(x) for x in hyp_tokens]
@@ -137,6 +137,27 @@ def accumulated_bleu(reference, decodes, sorted_key, uncertainty, name):
   tf.logging.info("Writing " + name + " into %s" % csv_filename)
   np.savetxt(csv_filename, np.column_stack((uncertainty, accumulated_bleus, individual_bleus, hyp_lengths)),
               delimiter=",", fmt='%s')
+
+  if n > 0:
+    save_top_bottom_n_lines(sorted_ref, sorted_hyp, uncertainty, individual_bleus, n, name)
+
+
+def save_top_bottom_n_lines(sorted_ref, sorted_hyp, uncertainty, individual_bleus, n, name):
+  tf.logging.info("Save " + str(n) +" most certain and uncertain lines for " + name)
+  certain_filename = FLAGS.decode_to_file + "." + name + ".top"+ str(n) +"certain.csv"
+  uncertain_filename = FLAGS.decode_to_file + "." + name + ".top"+ str(n) +"uncertain.csv"
+  all_filename = FLAGS.decode_to_file + "." + name + ".all_sentences.csv"
+
+  tf.logging.info("Writing most certain into %s" % certain_filename)
+  np.savetxt(certain_filename, np.column_stack((uncertainty[:n], individual_bleus[:n], sorted_ref[:n], sorted_hyp[:n])),
+              delimiter="\n", fmt='%s')
+  tf.logging.info("Writing most uncertain into %s" % uncertain_filename)
+  np.savetxt(uncertain_filename, np.column_stack((uncertainty[-n:], individual_bleus[-n:], sorted_ref[-n:], sorted_hyp[-n:])),
+              delimiter="\n", fmt='%s')
+  tf.logging.info("Writing all sample sentences into %s" % all_filename)
+  np.savetxt(all_filename, np.column_stack((uncertainty, individual_bleus, sorted_ref, sorted_hyp)),
+              delimiter="\n", fmt='%s')
+
 
 
 def main(_):
@@ -208,6 +229,7 @@ def main(_):
 
   # mc_dropout_seeds = np.random.randint(1000000, size=(num_MC_samples,2))
   mc_dropout_seeds = np.array([[963161, 57822], [4079, 408351], [831960, 391823], [536474, 973488], [306481, 730954], [999606, 639192], [354619, 782949], [740518, 829690], [529201, 462722], [868498, 15792]])
+  # mc_dropout_seeds = np.array([[877966, 633409], [656180, 281352], [331414, 131169], [534899, 982000], [398040, 80297], [825777, 505223], [923652, 525276], [453860, 90373], [980630, 423907], [831012, 974534], [223724, 235974], [654986, 842048], [275006, 439049], [645188, 149118], [435427, 816872], [106398, 12526], [512481, 968763], [112794, 535068], [916261, 385420], [931402, 20247], [337422, 838268], [401, 588352], [787330, 19774], [316441, 569047], [629828, 846027], [904342, 506056], [411307, 264639], [115254, 72258], [836409, 684290], [970116, 609927], [351874, 427484], [271295, 347533], [744763, 348654], [212875, 170658], [196699, 90441], [688319, 346517], [799346, 811484], [584440, 577739], [288212, 849173], [261543, 597908], [165319, 912690], [283705, 621478], [625802, 73202], [616945, 781541], [174096, 158909], [891038, 436949], [743619, 397065], [844739, 943191], [526238, 778676], [258134, 541544]])
   # mc_dropout_seeds = np.array([[853751, 85362], [853751, 85362]])
   for i in range(num_MC_samples):
 
@@ -299,35 +321,35 @@ def main(_):
 
   tf.logging.info("Ordering the seqence prob result by BS scores and BS log probs.")
   sorted_bs_scores_key = sorted(range(len(bs_scores)), key=lambda k: bs_scores[k], reverse=True)
-  sorted_bs_log_probs_key = sorted(range(len(bs_log_probs)), key=lambda k: bs_log_probs[k], reverse=True) 
+  # sorted_bs_log_probs_key = sorted(range(len(bs_log_probs)), key=lambda k: bs_log_probs[k], reverse=True) 
 
-  tf.logging.info("Ordering the seqence prob result by seq_prob scores and seq_prob log probs.")
-  sorted_seq_prob_scores_key = sorted(range(len(seq_prob_scores)), key=lambda k: seq_prob_scores[k], reverse=True)
-  sorted_seq_prob_log_probs_key = sorted(range(len(seq_prob_log_probs)), key=lambda k: seq_prob_log_probs[k], reverse=True) 
+  # tf.logging.info("Ordering the seqence prob result by seq_prob scores and seq_prob log probs.")
+  # sorted_seq_prob_scores_key = sorted(range(len(seq_prob_scores)), key=lambda k: seq_prob_scores[k], reverse=True)
+  # sorted_seq_prob_log_probs_key = sorted(range(len(seq_prob_log_probs)), key=lambda k: seq_prob_log_probs[k], reverse=True) 
 
   tf.logging.info("Ordering the seqence prob result by MC scores and MC log probs.")
   sorted_mc_scores_key = sorted(range(len(mc_scores)), key=lambda k: mc_scores[k], reverse=True)
-  sorted_mc_log_probs_key = sorted(range(len(mc_log_probs)), key=lambda k: mc_log_probs[k], reverse=True)
+  # sorted_mc_log_probs_key = sorted(range(len(mc_log_probs)), key=lambda k: mc_log_probs[k], reverse=True)
 
-  tf.logging.info("Ordering the seqence prob result by MC scores approximated on token level")
-  sorted_mc_token_scores_key = sorted(range(len(mc_token_scores)), key=lambda k: mc_token_scores[k], reverse=True)
+  # tf.logging.info("Ordering the seqence prob result by MC scores approximated on token level")
+  # sorted_mc_token_scores_key = sorted(range(len(mc_token_scores)), key=lambda k: mc_token_scores[k], reverse=True)
 
-  tf.logging.info("Ordering the seqence prob result by log (seq_prob variance)")
-  sorted_log_p_var_key = sorted(range(len(log_p_var)), key=lambda k: log_p_var[k])
+  # tf.logging.info("Ordering the seqence prob result by log (seq_prob variance)")
+  # sorted_log_p_var_key = sorted(range(len(log_p_var)), key=lambda k: log_p_var[k])
 
   # Reorder according to the sorted scores and log probs
   bs_scores = [bs_scores[sorted_bs_scores_key[index]] for index in range(len(sorted_bs_scores_key))]
-  bs_log_probs = [bs_log_probs[sorted_bs_log_probs_key[index]] for index in range(len(sorted_bs_log_probs_key))]
+  # bs_log_probs = [bs_log_probs[sorted_bs_log_probs_key[index]] for index in range(len(sorted_bs_log_probs_key))]
 
-  seq_prob_scores = [seq_prob_scores[sorted_seq_prob_scores_key[index]] for index in range(len(sorted_seq_prob_scores_key))]
-  seq_prob_log_probs = [seq_prob_log_probs[sorted_seq_prob_log_probs_key[index]] for index in range(len(sorted_seq_prob_log_probs_key))]
+  # seq_prob_scores = [seq_prob_scores[sorted_seq_prob_scores_key[index]] for index in range(len(sorted_seq_prob_scores_key))]
+  # seq_prob_log_probs = [seq_prob_log_probs[sorted_seq_prob_log_probs_key[index]] for index in range(len(sorted_seq_prob_log_probs_key))]
 
   mc_scores = [mc_scores[sorted_mc_scores_key[index]] for index in range(len(sorted_mc_scores_key))]
-  mc_log_probs = [mc_log_probs[sorted_mc_log_probs_key[index]] for index in range(len(sorted_mc_log_probs_key))]
+  # mc_log_probs = [mc_log_probs[sorted_mc_log_probs_key[index]] for index in range(len(sorted_mc_log_probs_key))]
 
-  mc_token_scores = [mc_token_scores[sorted_mc_token_scores_key[index]] for index in range(len(sorted_mc_token_scores_key))]
+  # mc_token_scores = [mc_token_scores[sorted_mc_token_scores_key[index]] for index in range(len(sorted_mc_token_scores_key))]
 
-  log_p_var = [log_p_var[sorted_log_p_var_key[index]] for index in range(len(sorted_log_p_var_key))]
+  # log_p_var = [log_p_var[sorted_log_p_var_key[index]] for index in range(len(sorted_log_p_var_key))]
 
 
   # ------------ For accumulated BLEU ------------------
@@ -335,18 +357,18 @@ def main(_):
   reference = text_encoder.native_to_unicode(
       tf.gfile.Open(FLAGS.reference, "r").read()).split("\n")
 
-  accumulated_bleu(reference, decodes, sorted_bs_scores_key, bs_scores, "bs_scores")
-  accumulated_bleu(reference, decodes, sorted_bs_log_probs_key, bs_log_probs, "bs_log_probs")
+  accumulated_bleu(reference, decodes, sorted_bs_scores_key, bs_scores, "bs_scores", 20)
+  # accumulated_bleu(reference, decodes, sorted_bs_log_probs_key, bs_log_probs, "bs_log_probs")
 
-  accumulated_bleu(reference, decodes, sorted_seq_prob_scores_key, seq_prob_scores, "seq_prob_scores")
-  accumulated_bleu(reference, decodes, sorted_seq_prob_log_probs_key, seq_prob_log_probs, "seq_prob_log_probs")
+  # accumulated_bleu(reference, decodes, sorted_seq_prob_scores_key, seq_prob_scores, "seq_prob_scores")
+  # accumulated_bleu(reference, decodes, sorted_seq_prob_log_probs_key, seq_prob_log_probs, "seq_prob_log_probs")
 
-  accumulated_bleu(reference, decodes, sorted_mc_scores_key, mc_scores, "mc_scores")
-  accumulated_bleu(reference, decodes, sorted_mc_log_probs_key, mc_log_probs, "mc_log_probs")
+  accumulated_bleu(reference, decodes, sorted_mc_scores_key, mc_scores, "mc_scores", 20)
+  # accumulated_bleu(reference, decodes, sorted_mc_log_probs_key, mc_log_probs, "mc_log_probs")
 
-  accumulated_bleu(reference, decodes, sorted_mc_token_scores_key, mc_token_scores, "mc_token_scores")
+  # accumulated_bleu(reference, decodes, sorted_mc_token_scores_key, mc_token_scores, "mc_token_scores")
 
-  accumulated_bleu(reference, decodes, sorted_log_p_var_key, log_p_var, "log_p_var")
+  # accumulated_bleu(reference, decodes, sorted_log_p_var_key, log_p_var, "log_p_var")
 
   # ------------ For token log prob ------------------
   aligned_token_log_probs = [seq for tup in zip(*all_token_log_probs) for seq in tup]
